@@ -42,7 +42,7 @@ export default function BuyerRequestsPage() {
       <div className="rounded-3xl bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 text-white p-6 sm:p-8 mb-8 shadow-[0_16px_40px_rgba(37,99,235,0.20)] flex flex-col lg:flex-row lg:items-center justify-between gap-6">
         <div className="max-w-2xl space-y-2">
           <p className="text-xs font-semibold text-blue-100 uppercase tracking-wider">
-            SELPLAS Reverse Marketplace
+            Selplase Reverse Marketplace
           </p>
           <h1 className="text-2xl sm:text-3xl font-extrabold font-display">
             Buyer Requests — Connect With Ready Buyers

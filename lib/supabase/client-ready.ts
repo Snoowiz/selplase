@@ -1,5 +1,5 @@
 /**
- * SELPLAS Data Access Layer — Stage 3: Supabase Marketplace Database & Storage Migration
+ * Selplase Data Access Layer — Stage 4: Google OAuth, Onboarding & Marketplace Database
  *
  * Active Supabase PostgreSQL tables:
  * - `public.profiles` (Stage 2)
@@ -45,6 +45,7 @@ export function getStage3Status() {
     migrations: [
       'supabase/migrations/20261112000001_user_profiles_and_rls.sql',
       'supabase/migrations/20261112000002_marketplace_listings_requests_offers.sql',
+      'supabase/migrations/20261112000003_stage4_onboarding_and_security_hardening.sql',
     ],
   };
 }

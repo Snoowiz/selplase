@@ -65,7 +65,9 @@ function AccountInterfaceInner({
     authLoading,
     authUser,
     userProfile,
+    isOnboardingComplete,
     refreshUserProfile,
+    signInWithGoogle,
     signOutUser,
     listings,
     buyerRequests,
@@ -82,16 +84,20 @@ function AccountInterfaceInner({
 
   // Auth Status & Error/Success Messages
   const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [googleSubmitting, setGoogleSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(
     errorFlag === 'confirmation_failed'
       ? 'Email confirmation or recovery link expired or was invalid. Please request a new link.'
-      : errorFlag === 'supabase_unconfigured'
-        ? 'Supabase environment variables are not configured yet.'
-        : null
+      : errorFlag === 'oauth_callback_failed' ||
+          errorFlag === 'missing_oauth_code'
+        ? 'Google sign-in could not be completed or was cancelled. Please try again.'
+        : errorFlag === 'supabase_unconfigured'
+          ? 'Supabase environment variables are not configured yet.'
+          : null
   );
   const [authSuccess, setAuthSuccess] = useState<string | null>(
     confirmedFlag
-      ? 'Your email has been confirmed and your session is active.'
+      ? 'Your session is active and verified.'
       : null
   );
 
@@ -162,6 +168,17 @@ function AccountInterfaceInner({
   // ---------------------------------------------------------------------------
   // AUTHENTICATION HANDLERS
   // ---------------------------------------------------------------------------
+
+  const handleGoogleSignIn = async () => {
+    setAuthError(null);
+    setAuthSuccess(null);
+    setGoogleSubmitting(true);
+    const result = await signInWithGoogle('/account?tab=dashboard');
+    if (result.error) {
+      setAuthError(result.error);
+      setGoogleSubmitting(false);
+    }
+  };
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -446,29 +463,36 @@ function AccountInterfaceInner({
           <div className="leading-relaxed">
             {isSupabaseConfigured ? (
               <>
-                <strong>Supabase Auth &amp; User Profiles Connected:</strong>{' '}
+                <strong>Selplase Auth &amp; User Profiles Connected:</strong>{' '}
                 {authUser ? (
                   <>
                     Signed in as{' '}
                     <span className="font-mono font-semibold">
                       {authUser.email}
                     </span>
-                    . Your profile is protected by Row Level Security (RLS).
+                    . Your profile is protected by Row Level Security (RLS) ·
+                    Onboarding:{' '}
+                    <strong>
+                      {isOnboardingComplete ? 'Completed' : 'Action Required'}
+                    </strong>
+                    .
                   </>
                 ) : (
-                  'Sign in or register below to access your private profile. Marketplace listings and requests remain browser-only demo data in Stage 2.'
+                  'Continue with Google or sign in below to access your private Selplase profile and publish marketplace listings.'
                 )}
               </>
             ) : (
               <>
-                <strong>Stage 2 Supabase Client &amp; RLS Ready (Awaiting Project Keys):</strong>{' '}
-                Real Supabase authentication, Nigerian phone normalisation, and
-                PostgreSQL RLS migrations are implemented, but{' '}
+                <strong>Selplase Google OAuth &amp; Supabase RLS Ready (Awaiting Project Keys):</strong>{' '}
+                Google OAuth (<code className="font-mono">signInWithOAuth</code>),
+                first-time onboarding (<code className="font-mono">/onboarding</code>),
+                Nigerian phone normalisation, and PostgreSQL RLS migrations are
+                implemented. Configure{' '}
                 <code className="font-mono">NEXT_PUBLIC_SUPABASE_URL</code> and{' '}
                 <code className="font-mono">
                   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
                 </code>{' '}
-                are not yet set in your environment.
+                to connect your Supabase project.
               </>
             )}
           </div>
@@ -505,7 +529,7 @@ function AccountInterfaceInner({
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-8">
         <div>
           <p className="text-xs font-semibold text-blue-600">
-            SELPLAS Account &amp; Seller Center
+            Selplase Account &amp; Seller Center
           </p>
           <h1 className="text-3xl font-extrabold text-slate-950 font-display mt-1">
             Account &amp; Profile
@@ -675,6 +699,27 @@ function AccountInterfaceInner({
                     </p>
                   </div>
                 </div>
+
+                {!isOnboardingComplete && (
+                  <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
+                    <div>
+                      <p className="font-bold">
+                        Complete Your Selplase Onboarding Profile
+                      </p>
+                      <p className="text-amber-800 mt-0.5">
+                        Your WhatsApp number, Nigerian location, and account
+                        role are required before publishing listings, buyer
+                        requests, or seller offers.
+                      </p>
+                    </div>
+                    <Link
+                      href="/onboarding?next=/account?tab=dashboard"
+                      className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold whitespace-nowrap shrink-0"
+                    >
+                      Complete Onboarding →
+                    </Link>
+                  </div>
+                )}
 
                 {profileFeedback && (
                   <div
@@ -931,34 +976,44 @@ function AccountInterfaceInner({
                 <div className="space-y-2 max-w-2xl">
                   <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700">
                     <ShieldCheck className="w-4 h-4" />
-                    <span>Protected Account Profile Area</span>
+                    <span>Protected Selplase Account Area</span>
                   </div>
                   <h2 className="text-xl font-bold text-slate-900 font-display">
-                    Sign In to View or Edit Your Personal Profile
+                    Continue with Google to Access Your Selplase Profile
                   </h2>
                   <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
                     Private user profile data (contact numbers, email, and
                     visibility settings) is protected by Supabase Auth and Row
-                    Level Security. Sign in or create an account to manage your
-                    profile.
+                    Level Security. Sign in with Google to manage your profile,
+                    complete onboarding, and publish marketplace listings.
                   </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3 shrink-0">
                   <button
                     type="button"
-                    onClick={() => setActiveTab('login')}
-                    className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                    onClick={handleGoogleSignIn}
+                    disabled={googleSubmitting}
+                    className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-semibold shadow-xs flex items-center gap-2 transition-colors cursor-pointer"
                   >
-                    Sign In
+                    {googleSubmitting && (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    )}
+                    Continue with Google
                   </button>
                   <button
                     type="button"
-                    onClick={() => setActiveTab('register')}
-                    className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition-colors cursor-pointer"
+                    onClick={() => setActiveTab('login')}
+                    className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
                   >
-                    Create Account
+                    Email Sign In
                   </button>
+                  <Link
+                    href="/onboarding"
+                    className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition-colors"
+                  >
+                    Preview Onboarding
+                  </Link>
                 </div>
               </div>
             )}
@@ -1107,15 +1162,15 @@ function AccountInterfaceInner({
               <div className="flex items-center gap-2.5">
                 <Database className="w-5 h-5 text-blue-600" />
                 <h2 className="text-lg font-bold text-slate-900 font-display">
-                  Stage 3 Supabase &amp; RLS Architecture
+                  Selplase Supabase &amp; Security Architecture
                 </h2>
               </div>
               <p className="text-xs text-slate-600 leading-relaxed">
-                Authentication, user profiles, marketplace listings, buyer
-                requests, offers, and photo uploads use{' '}
-                <code className="font-mono">@supabase/ssr</code> and{' '}
-                <code className="font-mono">@supabase/supabase-js</code> with
-                strict Row Level Security.
+                Google OAuth authentication, first-time user onboarding,
+                profiles, marketplace listings, buyer requests, offers, and
+                photo uploads use <code className="font-mono">@supabase/ssr</code>{' '}
+                with hardened PostgreSQL Row Level Security and column-level
+                privileges.
               </p>
               <ul className="space-y-2 text-xs text-slate-700">
                 <li>
@@ -1131,20 +1186,21 @@ function AccountInterfaceInner({
                   </code>
                 </li>
                 <li>
+                  • <strong>Stage 4 Migration (Onboarding &amp; Security Hardening):</strong>{' '}
+                  <code className="font-mono text-[11px]">
+                    supabase/migrations/20261112000003_stage4_onboarding_and_security_hardening.sql
+                  </code>
+                </li>
+                <li>
                   • <strong>Active PostgreSQL Tables:</strong>{' '}
                   <code className="font-mono text-[11px]">
                     public.profiles, public.listings, public.buyer_requests, public.request_offers
                   </code>
                 </li>
                 <li>
-                  • <strong>Supabase Storage Bucket:</strong>{' '}
-                  <code className="font-mono text-[11px]">listing-images</code>{' '}
-                  (folder-isolated per <code className="font-mono">auth.uid()</code>)
-                </li>
-                <li>
-                  • <strong>Marketplace APIs:</strong>{' '}
+                  • <strong>Auth &amp; Onboarding Endpoints:</strong>{' '}
                   <code className="font-mono text-[11px]">
-                    /api/profile, /api/listings, /api/requests, /api/offers
+                    /auth/callback, /onboarding, /api/onboarding, /api/profile
                   </code>
                 </li>
               </ul>
@@ -1280,7 +1336,7 @@ function AccountInterfaceInner({
                     /^0/,
                     ''
                   )}?text=${encodeURIComponent(
-                    `Hello ${demoSeller.fullName}, I viewed your Seller Profile on SELPLAS.`
+                    `Hello ${demoSeller.fullName}, I viewed your Seller Profile on Selplase.`
                   )}`}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -1343,21 +1399,49 @@ function AccountInterfaceInner({
       )}
 
       {/* =================================================================== */}
-      {/* TAB 3: LOGIN SCREEN                                                 */}
+      {/* TAB 3: LOGIN SCREEN (PRIMARY GOOGLE OAUTH + EMAIL FALLBACK)         */}
       {/* =================================================================== */}
       {activeTab === 'login' && (
         <div className="max-w-md mx-auto">
           <div className="rounded-3xl bg-white/90 backdrop-blur-2xl border border-slate-200/80 shadow-xl p-7 sm:p-8 space-y-5">
             <div>
               <p className="text-xs font-semibold text-blue-600">
-                Supabase Authentication
+                Selplase Authentication
               </p>
               <h2 className="text-2xl font-extrabold text-slate-950 font-display mt-1">
-                Sign In to SELPLAS
+                Sign In to Selplase
               </h2>
               <p className="text-xs text-slate-500 mt-1">
-                Sign in with your email and password to access your profile.
+                Continue with Google for fast one-click sign-in and account
+                creation, or use your email and password below.
               </p>
+            </div>
+
+            {/* Primary: Continue with Google */}
+            <div className="space-y-2.5">
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                disabled={googleSubmitting}
+                className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-sm font-semibold shadow-sm flex items-center justify-center gap-2.5 transition-colors cursor-pointer"
+              >
+                {googleSubmitting && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                <span>Continue with Google</span>
+              </button>
+              <p className="text-[11px] text-center text-slate-500">
+                First-time Google users are guided through a quick 1-minute
+                Selplase onboarding step.
+              </p>
+            </div>
+
+            <div className="relative flex items-center py-1">
+              <div className="flex-grow border-t border-slate-200" />
+              <span className="shrink-0 mx-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                or sign in with email
+              </span>
+              <div className="flex-grow border-t border-slate-200" />
             </div>
 
             <form onSubmit={handleLoginSubmit} className="space-y-4">
@@ -1417,21 +1501,29 @@ function AccountInterfaceInner({
                 {authSubmitting && (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 )}
-                Sign In
+                Sign In with Email
               </button>
             </form>
 
             <div className="pt-4 border-t border-slate-100 text-center text-xs text-slate-600">
-              Don&apos;t have an account?{' '}
+              New to Selplase?{' '}
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                className="font-semibold text-blue-600 hover:underline cursor-pointer"
+              >
+                Continue with Google
+              </button>{' '}
+              or{' '}
               <button
                 type="button"
                 onClick={() => {
                   setActiveTab('register');
                   setAuthError(null);
                 }}
-                className="font-semibold text-blue-600 hover:underline cursor-pointer"
+                className="font-semibold text-slate-700 hover:underline cursor-pointer"
               >
-                Create an Account
+                use email registration
               </button>
             </div>
           </div>
@@ -1439,22 +1531,48 @@ function AccountInterfaceInner({
       )}
 
       {/* =================================================================== */}
-      {/* TAB 4: REGISTRATION SCREEN (WITH PASSWORD + CONFIRM PASSWORD)       */}
+      {/* TAB 4: REGISTRATION SCREEN (GOOGLE RECOMMENDED + EMAIL COMPAT)      */}
       {/* =================================================================== */}
       {activeTab === 'register' && (
         <div className="max-w-xl mx-auto">
           <div className="rounded-3xl bg-white/90 backdrop-blur-2xl border border-slate-200/80 shadow-xl p-7 sm:p-8 space-y-5">
             <div>
               <p className="text-xs font-semibold text-blue-600">
-                Supabase Auth &amp; User Profile Registration
+                Selplase Account Creation
               </p>
               <h2 className="text-2xl font-extrabold text-slate-950 font-display mt-1">
-                Create Your SELPLAS Account
+                Create Your Selplase Account
               </h2>
               <p className="text-xs text-slate-500 mt-1">
-                Your contact numbers are normalised to +234 format, kept private
-                by default, and marked unverified until verified.
+                We recommend signing up with Google, then completing your
+                1-minute Nigerian WhatsApp &amp; location onboarding.
               </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2.5">
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                disabled={googleSubmitting}
+                className="w-full py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-sm font-semibold shadow-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                {googleSubmitting && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                Continue with Google (Recommended)
+              </button>
+              <p className="text-[11px] text-center text-slate-500">
+                No password to remember — your contact numbers remain private by
+                default and marked unverified.
+              </p>
+            </div>
+
+            <div className="relative flex items-center py-1">
+              <div className="flex-grow border-t border-slate-200" />
+              <span className="shrink-0 mx-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                or register with email &amp; password
+              </span>
+              <div className="flex-grow border-t border-slate-200" />
             </div>
 
             {Object.keys(regFieldErrors).length > 0 && (

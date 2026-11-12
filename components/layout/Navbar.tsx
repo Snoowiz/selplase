@@ -10,12 +10,14 @@ import { ContactSellerModal } from '@/components/marketplace/ContactSellerModal'
 
 export function Navbar() {
   const pathname = usePathname();
-  const { authUser, userProfile } = useMarketplace();
+  const { authUser, userProfile, isOnboardingComplete } = useMarketplace();
 
   const accountLabel = authUser
-    ? userProfile?.display_name
-      ? `Account (${userProfile.display_name.split(' ')[0]})`
-      : 'Account (Signed In)'
+    ? !isOnboardingComplete
+      ? 'Complete Onboarding'
+      : userProfile?.display_name
+        ? `Account (${userProfile.display_name.split(' ')[0]})`
+        : 'Account (Signed In)'
     : 'Sign In';
 
   const navLinks = [
@@ -24,7 +26,11 @@ export function Navbar() {
     { href: '/requests', label: 'Requests' },
     { href: '/sell', label: 'Start Selling' },
     {
-      href: authUser ? '/account?tab=dashboard' : '/account?tab=login',
+      href: authUser
+        ? !isOnboardingComplete
+          ? '/onboarding'
+          : '/account?tab=dashboard'
+        : '/account?tab=login',
       label: accountLabel,
     },
   ];
@@ -38,7 +44,7 @@ export function Navbar() {
             href="/"
             className="text-xl font-extrabold tracking-tight text-slate-900 font-display whitespace-nowrap shrink-0"
           >
-            SELPLAS
+            Selplase
           </Link>
 
           {/* Zone 2: 5 clean single-line text navigation links */}

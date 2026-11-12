@@ -96,7 +96,7 @@ function getIllustrationForCategory(
 }
 
 export function mapDbListingToListing(row: DbMarketplaceListingRow): Listing {
-  const sellerName = (row.seller_display_name || 'SELPLAS Seller').trim();
+  const sellerName = (row.seller_display_name || 'Selplase Seller').trim();
   const categoryObj = CATEGORIES.find((c) => c.id === row.category);
   const handleBase = sellerName
     .toLowerCase()
@@ -123,7 +123,7 @@ export function mapDbListingToListing(row: DbMarketplaceListingRow): Listing {
         ? row.highlights
         : [
             `${row.condition} · Available in ${row.city}, ${row.state}`,
-            'Published by registered SELPLAS account',
+            'Published by registered Selplase account',
           ],
     images: Array.isArray(row.images) ? row.images : [],
     visualTheme: {
@@ -138,7 +138,7 @@ export function mapDbListingToListing(row: DbMarketplaceListingRow): Listing {
     seller: {
       id: row.seller_id,
       fullName: sellerName,
-      handle: `@${handleBase || 'selplasseller'}`,
+      handle: `@${handleBase || 'selplaseseller'}`,
       avatarColor: 'bg-blue-600',
       initials: getInitials(sellerName),
       state: row.seller_state || row.state,
@@ -151,7 +151,7 @@ export function mapDbListingToListing(row: DbMarketplaceListingRow): Listing {
         : 'Registered Member',
       responseTime: 'Direct Seller Account',
       whatsappPhone: row.seller_public_whatsapp || '',
-      bio: `Registered SELPLAS seller in ${row.seller_city || row.city}, ${row.seller_state || row.state}.`,
+      bio: `Registered Selplase seller in ${row.seller_city || row.city}, ${row.seller_state || row.state}.`,
       totalListings: 1,
       completedDealsDemo: 0,
       isDemoAccount: false,
@@ -163,7 +163,7 @@ export function mapDbListingToListing(row: DbMarketplaceListingRow): Listing {
 export function mapDbBuyerRequestToBuyerRequest(
   row: DbMarketplaceBuyerRequestRow
 ): BuyerRequest {
-  const buyerName = (row.buyer_display_name || 'SELPLAS Buyer').trim();
+  const buyerName = (row.buyer_display_name || 'Selplase Buyer').trim();
   const categoryObj = CATEGORIES.find((c) => c.id === row.category);
 
   return {
@@ -243,6 +243,7 @@ export function validateOfferSubmission(params: {
   offeredPriceNaira: number;
   location: string;
   note?: string;
+  sellerOnboardingCompleted?: boolean;
 }): {
   valid: boolean;
   status: 200 | 400 | 403;
@@ -253,6 +254,15 @@ export function validateOfferSubmission(params: {
       valid: false,
       status: 403,
       error: 'You must be signed in to submit an offer.',
+    };
+  }
+
+  if (params.sellerOnboardingCompleted === false) {
+    return {
+      valid: false,
+      status: 403,
+      error:
+        'Please complete your Selplase onboarding profile before submitting an offer.',
     };
   }
 
@@ -295,4 +305,143 @@ export function validateOfferSubmission(params: {
   }
 
   return { valid: true, status: 200 };
+}
+
+/**
+ * Enforces role-specific offer update rules (Stage 4 security hardening):
+ * - Ownership fields (`id`, `request_id`, `seller_id`, `created_at`) are immutable.
+ * - Sellers can only update offer terms (`offered_price_naira`, `condition`, `location`, `note`)
+ *   while `existingOffer.status === 'pending'`, and cannot change `status`.
+ * - Buyers (request owners) can only transition `status` (`accepted` | `declined`) and
+ *   cannot modify the seller's price, condition, location, or note.
+ */
+export function validateOfferUpdate(params: {
+  authenticatedUserId: string;
+  existingOffer: {
+    id: string;
+    request_id: string;
+    seller_id: string;
+    status: 'pending' | 'accepted' | 'declined';
+  };
+  buyerRequestOwnerId: string;
+  updates: Record<string, unknown>;
+}): {
+  valid: boolean;
+  status: 200 | 400 | 403;
+  error?: string;
+  sanitizedUpdates?: Record<string, unknown>;
+} {
+  const { authenticatedUserId, existingOffer, buyerRequestOwnerId, updates } =
+    params;
+
+  if (!authenticatedUserId) {
+    return {
+      valid: false,
+      status: 403,
+      error: 'Authentication required to update an offer.',
+    };
+  }
+
+  const immutableFields = ['id', 'request_id', 'seller_id', 'created_at'];
+  for (const field of immutableFields) {
+    if (field in updates) {
+      return {
+        valid: false,
+        status: 403,
+        error: `Forbidden: Field "${field}" on request_offers is immutable.`,
+      };
+    }
+  }
+
+  const isSeller = authenticatedUserId === existingOffer.seller_id;
+  const isBuyer = authenticatedUserId === buyerRequestOwnerId;
+
+  if (!isSeller && !isBuyer) {
+    return {
+      valid: false,
+      status: 403,
+      error: 'Forbidden: You are not a participant in this offer.',
+    };
+  }
+
+  if (isSeller) {
+    if (existingOffer.status !== 'pending') {
+      return {
+        valid: false,
+        status: 403,
+        error:
+          'Forbidden: Sellers cannot modify an offer after the buyer has responded.',
+      };
+    }
+    if ('status' in updates && updates.status !== existingOffer.status) {
+      return {
+        valid: false,
+        status: 403,
+        error: 'Forbidden: Sellers cannot change the status of an offer.',
+      };
+    }
+
+    const sanitized: Record<string, unknown> = {};
+    if ('offered_price_naira' in updates) {
+      const price = Math.round(Number(updates.offered_price_naira));
+      if (!Number.isFinite(price) || price < 500) {
+        return {
+          valid: false,
+          status: 400,
+          error: 'Offered price must be at least ₦500.',
+        };
+      }
+      sanitized.offered_price_naira = price;
+    }
+    if (typeof updates.condition === 'string' && updates.condition.trim()) {
+      sanitized.condition = updates.condition.trim();
+    }
+    if (typeof updates.location === 'string') {
+      if (updates.location.trim().length < 2) {
+        return {
+          valid: false,
+          status: 400,
+          error: 'Location must be at least 2 characters.',
+        };
+      }
+      sanitized.location = updates.location.trim();
+    }
+    if (typeof updates.note === 'string') {
+      sanitized.note = updates.note.trim().slice(0, 1000);
+    }
+
+    return { valid: true, status: 200, sanitizedUpdates: sanitized };
+  }
+
+  // Buyer (request owner) branch
+  const sellerTermFields = [
+    'offered_price_naira',
+    'condition',
+    'location',
+    'note',
+  ];
+  for (const field of sellerTermFields) {
+    if (field in updates) {
+      return {
+        valid: false,
+        status: 403,
+        error: `Forbidden: Buyers cannot modify seller offer field "${field}".`,
+      };
+    }
+  }
+
+  const nextStatus = updates.status;
+  if (nextStatus !== 'accepted' && nextStatus !== 'declined') {
+    return {
+      valid: false,
+      status: 400,
+      error: 'Buyers may only transition offer status to "accepted" or "declined".',
+    };
+  }
+
+  return {
+    valid: true,
+    status: 200,
+    sanitizedUpdates: { status: nextStatus },
+  };
 }

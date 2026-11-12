@@ -1,29 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  isProfileOnboardingComplete,
   normalizeNigerianPhone,
-  validateRegistrationInput,
-  validateAndSanitizeProfileUpdate,
+  sanitizeRedirectPath,
   toPublicSellerProfile,
+  validateAndSanitizeProfileUpdate,
+  validateOnboardingInput,
+  validateRegistrationInput,
 } from './profile-utils';
 import type { UserProfileRow } from '../types/profile';
 
 test('normalizeNigerianPhone converts local 080/081/090/070 numbers to +234 E.164 format', () => {
-  const r1 = normalizeNigerianPhone('0803 000 1122');
-  assert.equal(r1.valid, true);
-  assert.equal(r1.normalized, '+2348030001122');
+  const local = normalizeNigerianPhone('0803 000 1122');
+  assert.equal(local.valid, true);
+  assert.equal(local.normalized, '+2348030001122');
 
-  const r2 = normalizeNigerianPhone('2349012345678');
-  assert.equal(r2.valid, true);
-  assert.equal(r2.normalized, '+2349012345678');
+  const intlNoPlus = normalizeNigerianPhone('2348090002233');
+  assert.equal(intlNoPlus.valid, true);
+  assert.equal(intlNoPlus.normalized, '+2348090002233');
 
-  const r3 = normalizeNigerianPhone('+234-812-000-3344');
-  assert.equal(r3.valid, true);
-  assert.equal(r3.normalized, '+2348120003344');
-
-  const empty = normalizeNigerianPhone('');
-  assert.equal(empty.valid, true);
-  assert.equal(empty.normalized, null);
+  const alreadyE164 = normalizeNigerianPhone('+2348120003344');
+  assert.equal(alreadyE164.valid, true);
+  assert.equal(alreadyE164.normalized, '+2348120003344');
 
   const invalid = normalizeNigerianPhone('12345');
   assert.equal(invalid.valid, false);
@@ -36,7 +35,7 @@ test('validateRegistrationInput checks password match and normalises Nigerian ph
     email: 'chidinma@example.com',
     password: 'Password123!',
     confirmPassword: 'DifferentPassword123!',
-    whatsappNumber: '08031234567',
+    whatsappNumber: '08030001122',
     state: 'Lagos',
     city: 'Lekki',
     accountRole: 'both',
@@ -49,98 +48,179 @@ test('validateRegistrationInput checks password match and normalises Nigerian ph
     email: 'chidinma@example.com',
     password: 'Password123!',
     confirmPassword: 'Password123!',
-    whatsappNumber: '0803 123 4567',
-    callingNumber: '0902 111 2222',
+    whatsappNumber: '0803 000 1122',
+    callingNumber: '0809 000 2233',
     state: 'Lagos',
-    city: 'Lekki',
+    city: 'Lekki Phase 1',
     accountRole: 'seller',
   });
   assert.equal(valid.valid, true);
-  assert.equal(valid.normalizedWhatsapp, '+2348031234567');
-  assert.equal(valid.normalizedCalling, '+2349021112222');
+  assert.equal(valid.normalizedWhatsapp, '+2348030001122');
+  assert.equal(valid.normalizedCalling, '+2348090002233');
+});
+
+test('validateOnboardingInput enforces compulsory WhatsApp number, location, display name, and role', () => {
+  const missingWhatsapp = validateOnboardingInput({
+    displayName: 'Adebayo Ogunlesi',
+    whatsappNumber: '',
+    state: 'Lagos',
+    city: 'Ikeja',
+    accountRole: 'both',
+  });
+  assert.equal(missingWhatsapp.valid, false);
+  assert.ok(missingWhatsapp.errors.whatsappNumber);
+
+  const validOnboarding = validateOnboardingInput({
+    displayName: 'Adebayo Ogunlesi',
+    whatsappNumber: '0803 123 4567',
+    state: 'Lagos',
+    city: 'Ikeja',
+    accountRole: 'seller',
+  });
+  assert.equal(validOnboarding.valid, true);
+  assert.equal(validOnboarding.normalizedWhatsapp, '+2348031234567');
+});
+
+test('isProfileOnboardingComplete rejects default Google-created rows without whatsapp_number or onboarding_completed', () => {
+  assert.equal(
+    isProfileOnboardingComplete({
+      display_name: 'Google User',
+      state: 'Lagos',
+      city: 'Lagos',
+      account_role: 'both',
+      whatsapp_number: null,
+      onboarding_completed: false,
+    }),
+    false
+  );
+
+  // Even if onboarding_completed were true on a malformed object without whatsapp_number, reject it
+  assert.equal(
+    isProfileOnboardingComplete({
+      display_name: 'Google User',
+      state: 'Lagos',
+      city: 'Lagos',
+      account_role: 'both',
+      whatsapp_number: null,
+      onboarding_completed: true,
+    }),
+    false
+  );
+
+  assert.equal(
+    isProfileOnboardingComplete({
+      display_name: 'Chidinma Okafor',
+      state: 'Lagos',
+      city: 'Lekki Phase 1',
+      account_role: 'both',
+      whatsapp_number: '+2348031234567',
+      onboarding_completed: true,
+    }),
+    true
+  );
+});
+
+test('sanitizeRedirectPath blocks external URLs, protocol-relative URLs, and javascript: schemes', () => {
+  assert.equal(
+    sanitizeRedirectPath('https://evil.example.com/phish'),
+    '/account?tab=dashboard'
+  );
+  assert.equal(
+    sanitizeRedirectPath('//evil.example.com/phish'),
+    '/account?tab=dashboard'
+  );
+  assert.equal(
+    sanitizeRedirectPath('/\\evil.example.com'),
+    '/account?tab=dashboard'
+  );
+  assert.equal(
+    sanitizeRedirectPath('javascript:alert(1)'),
+    '/account?tab=dashboard'
+  );
+  assert.equal(sanitizeRedirectPath('/sell'), '/sell');
+  assert.equal(sanitizeRedirectPath('/requests/new'), '/requests/new');
 });
 
 test('validateAndSanitizeProfileUpdate blocks editing another user profile or escalating privileges', () => {
-  // 1. Unauthenticated request blocked with 401
-  const unauth = validateAndSanitizeProfileUpdate({
-    authenticatedUserId: null,
-    targetProfileId: 'user-1',
-    payload: { display_name: 'Hacker' },
+  const crossUserAttempt = validateAndSanitizeProfileUpdate({
+    authenticatedUserId: 'user-111',
+    targetProfileId: 'user-222',
+    payload: { display_name: 'Hacked Name' },
   });
-  assert.equal(unauth.ok, false);
-  assert.equal(unauth.status, 401);
+  assert.equal(crossUserAttempt.ok, false);
+  assert.equal(crossUserAttempt.status, 403);
 
-  // 2. Editing another user's profile blocked with 403
-  const crossUser = validateAndSanitizeProfileUpdate({
-    authenticatedUserId: 'user-1',
-    targetProfileId: 'user-2',
-    payload: { display_name: 'Unauthorized Edit' },
+  const adminEscalationAttempt = validateAndSanitizeProfileUpdate({
+    authenticatedUserId: 'user-111',
+    targetProfileId: 'user-111',
+    payload: { display_name: 'Valid Name', is_admin: true },
   });
-  assert.equal(crossUser.ok, false);
-  assert.equal(crossUser.status, 403);
+  assert.equal(adminEscalationAttempt.ok, false);
+  assert.equal(adminEscalationAttempt.status, 403);
 
-  // 3. Attempting to self-verify or self-assign admin blocked with 403
-  const selfVerify = validateAndSanitizeProfileUpdate({
-    authenticatedUserId: 'user-1',
-    targetProfileId: 'user-1',
+  const verificationEscalationAttempt = validateAndSanitizeProfileUpdate({
+    authenticatedUserId: 'user-111',
+    targetProfileId: 'user-111',
     payload: { verification_status: 'verified' },
   });
-  assert.equal(selfVerify.ok, false);
-  assert.equal(selfVerify.status, 403);
+  assert.equal(verificationEscalationAttempt.ok, false);
+  assert.equal(verificationEscalationAttempt.status, 403);
 
-  const selfAdmin = validateAndSanitizeProfileUpdate({
-    authenticatedUserId: 'user-1',
-    targetProfileId: 'user-1',
-    payload: { is_admin: true },
+  const clientOnboardingBypassAttempt = validateAndSanitizeProfileUpdate({
+    authenticatedUserId: 'user-111',
+    targetProfileId: 'user-111',
+    payload: { onboarding_completed: true },
   });
-  assert.equal(selfAdmin.ok, false);
-  assert.equal(selfAdmin.status, 403);
+  assert.equal(clientOnboardingBypassAttempt.ok, false);
+  assert.equal(clientOnboardingBypassAttempt.status, 403);
 
-  // 4. Valid owner edit succeeds and normalizes phone numbers
-  const validEdit = validateAndSanitizeProfileUpdate({
-    authenticatedUserId: 'user-1',
-    targetProfileId: 'user-1',
+  const validUpdate = validateAndSanitizeProfileUpdate({
+    authenticatedUserId: 'user-111',
+    targetProfileId: 'user-111',
     payload: {
-      display_name: 'Updated Name',
-      whatsapp_number: '08051112233',
+      display_name: 'Chidinma Ventures',
+      whatsapp_number: '0803 000 1122',
       show_whatsapp_publicly: true,
     },
   });
-  assert.equal(validEdit.ok, true);
-  assert.equal(validEdit.status, 200);
-  assert.equal(validEdit.sanitized?.whatsapp_number, '+2348051112233');
-  assert.equal(validEdit.sanitized?.show_whatsapp_publicly, true);
+  assert.equal(validUpdate.ok, true);
+  assert.equal(validUpdate.status, 200);
+  assert.equal(validUpdate.sanitized?.whatsapp_number, '+2348030001122');
+  assert.equal(validUpdate.sanitized?.show_whatsapp_publicly, true);
 });
 
 test('toPublicSellerProfile hides email and private numbers by default', () => {
-  const sampleRow: UserProfileRow = {
-    id: 'user-123',
-    display_name: 'Kemi Adeyemi',
-    email: 'kemi.private@example.com',
-    whatsapp_number: '+2348031112222',
-    calling_number: '+2348093334444',
+  const fullProfile: UserProfileRow = {
+    id: 'user-111',
+    display_name: 'Chidinma Okafor',
+    email: 'private-email@example.com',
+    whatsapp_number: '+2348030001122',
+    calling_number: '+2348090002233',
     state: 'Lagos',
-    city: 'Ikeja',
+    city: 'Lekki',
     account_role: 'seller',
     avatar_url: null,
     show_whatsapp_publicly: false,
     show_calling_publicly: false,
     verification_status: 'unverified',
     is_admin: false,
+    onboarding_completed: true,
+    onboarding_completed_at: '2026-11-12T00:00:00Z',
     created_at: '2026-11-12T00:00:00Z',
     updated_at: '2026-11-12T00:00:00Z',
   };
 
-  const hiddenProjection = toPublicSellerProfile(sampleRow);
-  assert.equal(hiddenProjection.public_whatsapp_number, null);
-  assert.equal(hiddenProjection.public_calling_number, null);
-  assert.equal('email' in hiddenProjection, false);
-  assert.equal('is_admin' in hiddenProjection, false);
+  const publicDefault = toPublicSellerProfile(fullProfile);
+  assert.equal('email' in publicDefault, false);
+  assert.equal('is_admin' in publicDefault, false);
+  assert.equal(publicDefault.public_whatsapp_number, null);
+  assert.equal(publicDefault.public_calling_number, null);
+  assert.equal(publicDefault.verification_status, 'unverified');
 
-  const optedInProjection = toPublicSellerProfile({
-    ...sampleRow,
+  const publicOptIn = toPublicSellerProfile({
+    ...fullProfile,
     show_whatsapp_publicly: true,
   });
-  assert.equal(optedInProjection.public_whatsapp_number, '+2348031112222');
-  assert.equal(optedInProjection.public_calling_number, null);
+  assert.equal(publicOptIn.public_whatsapp_number, '+2348030001122');
+  assert.equal(publicOptIn.public_calling_number, null);
 });

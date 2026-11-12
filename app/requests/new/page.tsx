@@ -3,7 +3,13 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, CheckCircle2, Handshake, Loader2 } from 'lucide-react';
+import {
+  AlertCircle,
+  ArrowLeft,
+  CheckCircle2,
+  Handshake,
+  Loader2,
+} from 'lucide-react';
 import { useMarketplace } from '@/context/MarketplaceContext';
 import {
   CATEGORIES,
@@ -20,7 +26,8 @@ import type {
 
 export default function CreateRequestPage() {
   const router = useRouter();
-  const { userProfile, publishBuyerRequest } = useMarketplace();
+  const { authUser, userProfile, isOnboardingComplete, publishBuyerRequest } =
+    useMarketplace();
 
   const [title, setTitle] = useState('');
   const [requestType, setRequestType] = useState<ListingType>('product');
@@ -95,6 +102,15 @@ export default function CreateRequestPage() {
     });
     setSubmitting(false);
 
+    if (result.onboardingRequired) {
+      setErrors({
+        onboarding:
+          result.error ||
+          'Please complete your Selplase onboarding profile before publishing buyer requests.',
+      });
+      return;
+    }
+
     setPersistedToDb(result.persistedToSupabase);
     setPublishFeedback(result.error || null);
     setCreatedId(result.request.id);
@@ -115,7 +131,7 @@ export default function CreateRequestPage() {
             </p>
             <h1 className="text-2xl font-extrabold text-slate-950 font-display mt-1">
               {persistedToDb
-                ? 'Buyer Request Live on SELPLAS'
+                ? 'Buyer Request Live on Selplase'
                 : 'Saved to Local Buyer Requests Board'}
             </h1>
             <p className="text-sm text-slate-600 mt-2">
@@ -184,6 +200,29 @@ export default function CreateRequestPage() {
           </div>
         </div>
       </div>
+
+      {authUser && !isOnboardingComplete && (
+        <div className="mb-6 rounded-2xl bg-amber-50 border border-amber-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">
+                Complete Onboarding Before Publishing Real Buyer Requests
+              </p>
+              <p className="text-amber-800 mt-0.5">
+                Confirm your WhatsApp contact and Nigerian location so sellers
+                can respond to your request.
+              </p>
+            </div>
+          </div>
+          <Link
+            href="/onboarding?next=/requests/new"
+            className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold whitespace-nowrap shrink-0"
+          >
+            Complete Onboarding →
+          </Link>
+        </div>
+      )}
 
       <form
         onSubmit={handleSubmit}

@@ -62,14 +62,14 @@ export function buildWhatsAppShareUrl(params: {
   const { title, priceText, location, url, type } = params;
   const label =
     type === 'request'
-      ? `Buyer Request on SELPLAS`
+      ? `Buyer Request on Selplase`
       : type === 'service'
-        ? `Service on SELPLAS`
-        : `For Sale on SELPLAS`;
+        ? `Service on Selplase`
+        : `For Sale on Selplase`;
 
   const message = `${label}: *${title}*\n${
     type === 'request' ? 'Budget' : 'Price'
-  }: ${priceText}\nLocation: ${location}\n\nView details on SELPLAS: ${url}`;
+  }: ${priceText}\nLocation: ${location}\n\nView details on Selplase: ${url}`;
 
   return `https://wa.me/?text=${encodeURIComponent(message)}`;
 }
@@ -93,8 +93,8 @@ export function buildWhatsAppContactUrl(params: {
 
   const text =
     mode === 'offer-request'
-      ? `Hello ${recipientName}, I saw your buyer request on SELPLAS for "${itemTitle}" (${priceText}). I have this available! View request: ${url}`
-      : `Hello ${recipientName}, I am interested in your listing on SELPLAS: "${itemTitle}" (${priceText}). Is it still available? Link: ${url}`;
+      ? `Hello ${recipientName}, I saw your buyer request on Selplase for "${itemTitle}" (${priceText}). I have this available! View request: ${url}`
+      : `Hello ${recipientName}, I am interested in your listing on Selplase: "${itemTitle}" (${priceText}). Is it still available? Link: ${url}`;
 
   const base = normalizedPhone
     ? `https://wa.me/${normalizedPhone}`

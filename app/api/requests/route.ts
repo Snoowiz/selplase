@@ -4,6 +4,7 @@ import {
   filterBuyerRequests,
   validateCreateRequest,
 } from '@/lib/utils/formatters';
+import { isProfileOnboardingComplete } from '@/lib/utils/profile-utils';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import {
   type DbMarketplaceBuyerRequestRow,
@@ -14,12 +15,11 @@ import type {
   CategorySlug,
   ListingType,
 } from '@/lib/types/marketplace';
+import type { UserProfileRow } from '@/lib/types/profile';
 
 /**
  * GET /api/requests
- * Stage 3: Queries live Supabase `public.get_marketplace_buyer_requests()` RPC.
- * Combines live multi-user database requests (`isDemoData: false`) with starter demo requests
- * (`isDemoData: true`) unless `includeDemo=false` is passed.
+ * Publicly accessible so visitors can browse buyer requests without logging in.
  */
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -67,7 +67,7 @@ export async function GET(req: NextRequest) {
       demoCount: includeDemo ? INITIAL_BUYER_REQUESTS.length : 0,
       dbReady,
       dbError,
-      stage: 'stage-3-supabase-requests',
+      stage: 'stage-4-selplase-requests',
       currency: 'NGN',
     },
   });
@@ -75,8 +75,7 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/requests
- * Stage 3: Authenticates the buyer via Supabase Auth, validates the request payload,
- * and inserts a new row into `public.buyer_requests` with `buyer_id = user.id`.
+ * Requires both an authenticated Supabase session AND a completed Selplase onboarding profile.
  */
 export async function POST(req: NextRequest) {
   const supabase = await createSupabaseServerClient();
@@ -99,27 +98,38 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         error:
-          'Unauthorized: Please sign in to your SELPLAS account to post a buyer request.',
+          'Unauthorized: Please sign in to your Selplase account to post a buyer request.',
       },
       { status: 401 }
+    );
+  }
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (!isProfileOnboardingComplete(profile as UserProfileRow | null)) {
+    return NextResponse.json(
+      {
+        error:
+          'Forbidden: Please complete your Selplase onboarding profile before posting a buyer request.',
+        code: 'ONBOARDING_REQUIRED',
+      },
+      { status: 403 }
     );
   }
 
   try {
     const body = await req.json();
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .maybeSingle();
-
     const effectiveBuyerName =
       String(body.buyerName || '').trim() ||
       profile?.display_name ||
       user.user_metadata?.display_name ||
       user.email?.split('@')[0] ||
-      'SELPLAS Buyer';
+      'Selplase Buyer';
 
     const validation = validateCreateRequest({
       ...body,
@@ -168,7 +178,7 @@ export async function POST(req: NextRequest) {
         {
           error:
             insertError?.message ||
-            'Failed to insert buyer request into public.buyer_requests. Ensure Stage 3 SQL migration has been applied.',
+            'Failed to insert buyer request into public.buyer_requests. Ensure Stage 3 & Stage 4 SQL migrations have been applied.',
         },
         { status: 400 }
       );
@@ -183,7 +193,7 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json(
-      { data: mapped, stage: 'stage-3-supabase-requests', persisted: true },
+      { data: mapped, stage: 'stage-4-selplase-requests', persisted: true },
       { status: 201 }
     );
   } catch {

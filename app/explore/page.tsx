@@ -78,7 +78,7 @@ function ExploreMarketplaceInner({
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
         <div>
           <p className="text-xs font-semibold text-blue-600">
-            SELPLAS Marketplace Directory
+            Selplase Marketplace Directory
           </p>
           <h1 className="text-3xl font-extrabold text-slate-950 font-display mt-1">
             Explore Products & Services

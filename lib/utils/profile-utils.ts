@@ -1,5 +1,6 @@
 import type {
   AccountRole,
+  OnboardingFormInput,
   PermittedProfileUpdateInput,
   PublicSellerProfile,
   RegistrationFormInput,
@@ -47,6 +48,111 @@ export function normalizeNigerianPhone(raw?: string | null): {
   }
 
   return { valid: true, normalized: candidate };
+}
+
+/**
+ * Sanitises OAuth, email-confirmation, and onboarding `next` redirect paths.
+ * Blocks open redirects (`https://evil.com`, `//evil.com`, `/\evil.com`, `javascript:...`).
+ */
+export function sanitizeRedirectPath(
+  rawNext: string | null | undefined,
+  fallback: string = '/account?tab=dashboard'
+): string {
+  if (!rawNext || typeof rawNext !== 'string') {
+    return fallback;
+  }
+  const trimmed = rawNext.trim();
+  if (!trimmed.startsWith('/')) {
+    return fallback;
+  }
+  if (
+    trimmed.startsWith('//') ||
+    trimmed.startsWith('/\\') ||
+    trimmed.includes('://') ||
+    trimmed.includes('\\') ||
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:/i.test(trimmed)
+  ) {
+    return fallback;
+  }
+  return trimmed;
+}
+
+/**
+ * Determines whether a user profile has genuinely completed Selplase onboarding.
+ * Never returns true merely because a Google account exists or default location values were inserted.
+ */
+export function isProfileOnboardingComplete(
+  profile: Partial<UserProfileRow> | null | undefined
+): boolean {
+  if (!profile) return false;
+  if (profile.onboarding_completed !== true) return false;
+
+  const nameOk =
+    typeof profile.display_name === 'string' &&
+    profile.display_name.trim().length >= 2;
+  const whatsappOk =
+    typeof profile.whatsapp_number === 'string' &&
+    NIGERIAN_E164_REGEX.test(profile.whatsapp_number.trim());
+  const stateOk =
+    typeof profile.state === 'string' && profile.state.trim().length >= 2;
+  const cityOk =
+    typeof profile.city === 'string' && profile.city.trim().length >= 2;
+  const roleOk = VALID_ROLES.includes(profile.account_role as AccountRole);
+
+  return nameOk && whatsappOk && stateOk && cityOk && roleOk;
+}
+
+/**
+ * Validates first-time user onboarding inputs (server & client).
+ * Requires Display Name, Nigerian WhatsApp number (+234), Nigerian State, City/Town, and Account Role.
+ */
+export function validateOnboardingInput(input: OnboardingFormInput): {
+  valid: boolean;
+  errors: Record<string, string>;
+  normalizedWhatsapp: string | null;
+  normalizedCalling: string | null;
+} {
+  const errors: Record<string, string> = {};
+
+  if (!input.displayName || input.displayName.trim().length < 2) {
+    errors.displayName =
+      'Please enter your display name or business name (at least 2 characters).';
+  }
+
+  const whatsappResult = normalizeNigerianPhone(input.whatsappNumber);
+  if (!input.whatsappNumber || !input.whatsappNumber.trim()) {
+    errors.whatsappNumber =
+      'Your WhatsApp phone number is compulsory for Selplase onboarding.';
+  } else if (!whatsappResult.valid || !whatsappResult.normalized) {
+    errors.whatsappNumber =
+      whatsappResult.error || 'Please enter a valid Nigerian WhatsApp number.';
+  }
+
+  const callingResult = normalizeNigerianPhone(input.callingNumber);
+  if (input.callingNumber && input.callingNumber.trim() && !callingResult.valid) {
+    errors.callingNumber =
+      callingResult.error || 'Invalid optional calling phone number.';
+  }
+
+  if (!input.state || input.state.trim().length < 2) {
+    errors.state = 'Please select your Nigerian state.';
+  }
+
+  if (!input.city || input.city.trim().length < 2) {
+    errors.city = 'Please enter your city or town (at least 2 characters).';
+  }
+
+  if (!VALID_ROLES.includes(input.accountRole)) {
+    errors.accountRole =
+      'Please select your account type (Buyer, Seller, or Both).';
+  }
+
+  return {
+    valid: Object.keys(errors).length === 0,
+    errors,
+    normalizedWhatsapp: whatsappResult.normalized,
+    normalizedCalling: callingResult.normalized,
+  };
 }
 
 /**
@@ -115,7 +221,7 @@ export function validateRegistrationInput(input: RegistrationFormInput): {
 /**
  * Enforces profile update security rules:
  * 1. Verifies that the authenticated user ID matches the target profile ID.
- * 2. Rejects any attempt to tamper with protected fields (`id`, `email`, `verification_status`, `is_admin`).
+ * 2. Rejects any attempt to tamper with protected fields (`id`, `email`, `verification_status`, `is_admin`, `onboarding_completed`).
  * 3. Validates and normalises permitted fields.
  */
 export function validateAndSanitizeProfileUpdate(params: {
@@ -146,20 +252,22 @@ export function validateAndSanitizeProfileUpdate(params: {
     };
   }
 
-  // Block any attempt to modify immutable or privileged columns
+  // Block any attempt to modify immutable or privileged columns directly
   const forbiddenFields = [
     'id',
     'email',
     'verification_status',
     'is_admin',
     'created_at',
+    'onboarding_completed',
+    'onboarding_completed_at',
   ];
   for (const field of forbiddenFields) {
     if (field in payload) {
       return {
         ok: false,
         status: 403,
-        error: `Forbidden: Field "${field}" cannot be modified by the user.`,
+        error: `Forbidden: Field "${field}" cannot be modified directly.`,
       };
     }
   }
@@ -183,8 +291,15 @@ export function validateAndSanitizeProfileUpdate(params: {
       typeof payload.whatsapp_number === 'string'
         ? payload.whatsapp_number
         : null;
+    if (!raw || !raw.trim()) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'WhatsApp phone number is required on your Selplase profile.',
+      };
+    }
     const res = normalizeNigerianPhone(raw);
-    if (!res.valid) {
+    if (!res.valid || !res.normalized) {
       return { ok: false, status: 400, error: res.error };
     }
     sanitized.whatsapp_number = res.normalized;

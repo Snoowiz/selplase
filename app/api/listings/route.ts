@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { CATEGORIES, INITIAL_LISTINGS } from '@/lib/data/mock-marketplace';
 import { filterListings, validateCreateListing } from '@/lib/utils/formatters';
+import { isProfileOnboardingComplete } from '@/lib/utils/profile-utils';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import {
   type DbMarketplaceListingRow,
@@ -12,12 +13,11 @@ import type {
   ListingType,
   ProductCondition,
 } from '@/lib/types/marketplace';
+import type { UserProfileRow } from '@/lib/types/profile';
 
 /**
  * GET /api/listings
- * Stage 3: Queries live Supabase `public.get_marketplace_listings()` RPC (or `public.listings`).
- * Preserves starter demonstration listings alongside real database rows so the catalog remains
- * populated before and after migration, while clearly tagging `isDemoData: false` on DB rows.
+ * Publicly accessible so visitors can browse marketplace listings without logging in.
  */
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -67,7 +67,7 @@ export async function GET(req: NextRequest) {
       demoCount: includeDemo ? INITIAL_LISTINGS.length : 0,
       dbReady,
       dbError,
-      stage: 'stage-3-supabase-listings',
+      stage: 'stage-4-selplase-listings',
       currency: 'NGN',
     },
   });
@@ -75,8 +75,7 @@ export async function GET(req: NextRequest) {
 
 /**
  * POST /api/listings
- * Stage 3: Authenticates the seller via Supabase Auth, validates the listing payload,
- * and inserts a new row into `public.listings` with `seller_id = user.id`.
+ * Requires both an authenticated Supabase session AND a completed Selplase onboarding profile.
  */
 export async function POST(req: NextRequest) {
   const supabase = await createSupabaseServerClient();
@@ -99,9 +98,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         error:
-          'Unauthorized: Please sign in to your SELPLAS account to publish a listing to the marketplace.',
+          'Unauthorized: Please sign in to your Selplase account to publish a listing to the marketplace.',
       },
       { status: 401 }
+    );
+  }
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (!isProfileOnboardingComplete(profile as UserProfileRow | null)) {
+    return NextResponse.json(
+      {
+        error:
+          'Forbidden: Please complete your Selplase onboarding profile (display name, Nigerian WhatsApp number, state, city, and account role) before publishing a listing.',
+        code: 'ONBOARDING_REQUIRED',
+      },
+      { status: 403 }
     );
   }
 
@@ -165,17 +181,11 @@ export async function POST(req: NextRequest) {
         {
           error:
             insertError?.message ||
-            'Failed to insert listing into public.listings. Ensure Stage 3 SQL migration has been applied.',
+            'Failed to insert listing into public.listings. Ensure Stage 3 & Stage 4 SQL migrations have been applied.',
         },
         { status: 400 }
       );
     }
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .maybeSingle();
 
     const mapped = mapDbListingToListing({
       ...(inserted as DbMarketplaceListingRow),
@@ -183,7 +193,7 @@ export async function POST(req: NextRequest) {
         profile?.display_name ||
         user.user_metadata?.display_name ||
         user.email?.split('@')[0] ||
-        'SELPLAS Seller',
+        'Selplase Seller',
       seller_state: profile?.state || String(body.state),
       seller_city: profile?.city || String(body.city),
       seller_verification_status: profile?.verification_status || 'unverified',
@@ -197,7 +207,7 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json(
-      { data: mapped, stage: 'stage-3-supabase-listings', persisted: true },
+      { data: mapped, stage: 'stage-4-selplase-listings', persisted: true },
       { status: 201 }
     );
   } catch {

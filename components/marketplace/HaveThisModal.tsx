@@ -56,7 +56,7 @@ export function HaveThisModal() {
   );
 
   const origin =
-    typeof window !== 'undefined' ? window.location.origin : 'https://selplas.ng';
+    typeof window !== 'undefined' ? window.location.origin : 'https://selplase.ng';
   const requestUrl = `${origin}/requests#${activeHaveThisRequest.id}`;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -84,6 +84,13 @@ export function HaveThisModal() {
       note,
     });
     setSubmitting(false);
+    if (result.onboardingRequired) {
+      setError(
+        result.error ||
+          'Please complete your Selplase onboarding profile at /onboarding before sending seller offers.'
+      );
+      return;
+    }
     setPersistedToDb(result.persistedToSupabase);
     setOfferFeedback(result.error || null);
     setSubmittedOfferPrice(numericPrice);

@@ -12,7 +12,7 @@ export function ShareModal() {
   if (!activeShareTarget) return null;
 
   const origin =
-    typeof window !== 'undefined' ? window.location.origin : 'https://selplas.ng';
+    typeof window !== 'undefined' ? window.location.origin : 'https://selplase.ng';
   const fullUrl = `${origin}${activeShareTarget.path}`;
 
   const whatsappUrl = buildWhatsAppShareUrl({
@@ -76,7 +76,7 @@ export function ShareModal() {
           </span>
           <div className="rounded-xl bg-white border border-emerald-100 p-3 shadow-xs">
             <p className="text-[11px] text-slate-400 font-mono truncate">
-              selplas.ng · {activeShareTarget.type.toUpperCase()}
+              selplase.ng · {activeShareTarget.type.toUpperCase()}
             </p>
             <p className="text-sm font-semibold text-slate-900 mt-0.5 line-clamp-1">
               {activeShareTarget.title}

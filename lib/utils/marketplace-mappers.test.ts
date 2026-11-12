@@ -5,6 +5,7 @@ import {
   mapDbBuyerRequestToBuyerRequest,
   mapDbListingToListing,
   validateOfferSubmission,
+  validateOfferUpdate,
   validateStorageObjectOwnership,
 } from './marketplace-mappers';
 
@@ -99,12 +100,23 @@ test('buildListingStoragePath and validateStorageObjectOwnership enforce user fo
   );
 });
 
-test('validateOfferSubmission blocks sellers from offering on their own buyer request and validates Naira price', () => {
+test('validateOfferSubmission blocks incomplete profiles, self-offers, and invalid Naira prices', () => {
+  const incompleteProfileOffer = validateOfferSubmission({
+    authenticatedSellerId: 'user-456',
+    buyerRequestOwnerId: 'user-123',
+    offeredPriceNaira: 450000,
+    location: 'Lekki Phase 1, Lagos',
+    sellerOnboardingCompleted: false,
+  });
+  assert.equal(incompleteProfileOffer.valid, false);
+  assert.equal(incompleteProfileOffer.status, 403);
+
   const selfOffer = validateOfferSubmission({
     authenticatedSellerId: 'user-123',
     buyerRequestOwnerId: 'user-123',
     offeredPriceNaira: 450000,
     location: 'Lekki Phase 1, Lagos',
+    sellerOnboardingCompleted: true,
   });
   assert.equal(selfOffer.valid, false);
   assert.equal(selfOffer.status, 403);
@@ -114,6 +126,7 @@ test('validateOfferSubmission blocks sellers from offering on their own buyer re
     buyerRequestOwnerId: 'user-123',
     offeredPriceNaira: 100,
     location: 'Lekki Phase 1, Lagos',
+    sellerOnboardingCompleted: true,
   });
   assert.equal(lowPriceOffer.valid, false);
   assert.equal(lowPriceOffer.status, 400);
@@ -124,7 +137,58 @@ test('validateOfferSubmission blocks sellers from offering on their own buyer re
     offeredPriceNaira: 450000,
     location: 'Lekki Phase 1, Lagos',
     note: 'Available for immediate inspection.',
+    sellerOnboardingCompleted: true,
   });
   assert.equal(validOffer.valid, true);
   assert.equal(validOffer.status, 200);
+});
+
+test('validateOfferUpdate prevents participants from manipulating protected offer fields', () => {
+  const existingOffer = {
+    id: 'offer-1',
+    request_id: 'req-1',
+    seller_id: 'seller-999',
+    status: 'pending' as const,
+  };
+  const buyerId = 'buyer-111';
+
+  // Seller cannot mark their own offer accepted
+  const sellerStatusTamper = validateOfferUpdate({
+    authenticatedUserId: 'seller-999',
+    existingOffer,
+    buyerRequestOwnerId: buyerId,
+    updates: { status: 'accepted' },
+  });
+  assert.equal(sellerStatusTamper.valid, false);
+  assert.equal(sellerStatusTamper.status, 403);
+
+  // Buyer cannot alter seller's offered_price_naira
+  const buyerPriceTamper = validateOfferUpdate({
+    authenticatedUserId: buyerId,
+    existingOffer,
+    buyerRequestOwnerId: buyerId,
+    updates: { offered_price_naira: 5000, status: 'accepted' },
+  });
+  assert.equal(buyerPriceTamper.valid, false);
+  assert.equal(buyerPriceTamper.status, 403);
+
+  // Neither participant can change seller_id
+  const ownershipTamper = validateOfferUpdate({
+    authenticatedUserId: 'seller-999',
+    existingOffer,
+    buyerRequestOwnerId: buyerId,
+    updates: { seller_id: 'someone-else' },
+  });
+  assert.equal(ownershipTamper.valid, false);
+  assert.equal(ownershipTamper.status, 403);
+
+  // Buyer can accept the offer
+  const validBuyerAccept = validateOfferUpdate({
+    authenticatedUserId: buyerId,
+    existingOffer,
+    buyerRequestOwnerId: buyerId,
+    updates: { status: 'accepted' },
+  });
+  assert.equal(validBuyerAccept.valid, true);
+  assert.equal(validBuyerAccept.sanitizedUpdates?.status, 'accepted');
 });

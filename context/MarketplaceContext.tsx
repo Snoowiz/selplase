@@ -26,6 +26,10 @@ import {
   buildNewListingEntity,
   buildSellerOfferEntity,
 } from '@/lib/supabase/client-ready';
+import {
+  isProfileOnboardingComplete,
+  sanitizeRedirectPath,
+} from '@/lib/utils/profile-utils';
 import { getSupabasePublicEnv } from '@/lib/supabase/config';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 
@@ -38,17 +42,19 @@ interface ShareTarget {
 }
 
 interface MarketplaceContextValue {
-  // Stage 2 & 3 Real Supabase Auth, Profile & DB Migration Status
+  // Stage 2–4 Real Supabase Auth, Google OAuth, Onboarding & DB Migration Status
   isSupabaseConfigured: boolean;
   marketplaceDbReady: boolean;
   authLoading: boolean;
   authUser: User | null;
   userProfile: UserProfileRow | null;
+  isOnboardingComplete: boolean;
+  signInWithGoogle: (nextPath?: string) => Promise<{ error?: string }>;
   refreshUserProfile: () => Promise<void>;
   refreshMarketplaceData: () => Promise<void>;
   signOutUser: () => Promise<void>;
 
-  // Stage 3 Marketplace State (Supabase PostgreSQL + Starter Demo Items)
+  // Marketplace State (Supabase PostgreSQL + Starter Demo Items)
   listings: Listing[];
   buyerRequests: BuyerRequest[];
   savedListingIds: string[];
@@ -59,12 +65,14 @@ interface MarketplaceContextValue {
   publishListing: (input: CreateListingInput) => Promise<{
     listing: Listing;
     persistedToSupabase: boolean;
+    onboardingRequired?: boolean;
     error?: string;
   }>;
   addBuyerRequest: (input: CreateRequestInput) => BuyerRequest;
   publishBuyerRequest: (input: CreateRequestInput) => Promise<{
     request: BuyerRequest;
     persistedToSupabase: boolean;
+    onboardingRequired?: boolean;
     error?: string;
   }>;
   submitOfferForRequest: (params: {
@@ -87,6 +95,7 @@ interface MarketplaceContextValue {
   }) => Promise<{
     offer: SellerOffer;
     persistedToSupabase: boolean;
+    onboardingRequired?: boolean;
     error?: string;
   }>;
   sendPlatformMessage: (params: {
@@ -176,10 +185,21 @@ export function MarketplaceProvider({
 
     const meta = user.user_metadata || {};
     const fallbackDisplayName =
-      typeof meta.display_name === 'string' &&
-      meta.display_name.trim().length >= 2
-        ? meta.display_name.trim()
-        : (user.email || 'SELPLAS Member').split('@')[0];
+      (typeof meta.display_name === 'string' &&
+        meta.display_name.trim().length >= 2 &&
+        meta.display_name.trim()) ||
+      (typeof meta.full_name === 'string' &&
+        meta.full_name.trim().length >= 2 &&
+        meta.full_name.trim()) ||
+      (typeof meta.name === 'string' &&
+        meta.name.trim().length >= 2 &&
+        meta.name.trim()) ||
+      (user.email || 'Selplase Member').split('@')[0];
+
+    const googleAvatar =
+      (typeof meta.avatar_url === 'string' && meta.avatar_url.trim()) ||
+      (typeof meta.picture === 'string' && meta.picture.trim()) ||
+      null;
 
     const { data: inserted } = await supabase
       .from('profiles')
@@ -188,26 +208,16 @@ export function MarketplaceProvider({
           id: user.id,
           display_name: fallbackDisplayName,
           email: user.email || '',
-          whatsapp_number:
-            typeof meta.whatsapp_number === 'string'
-              ? meta.whatsapp_number
-              : null,
-          calling_number:
-            typeof meta.calling_number === 'string'
-              ? meta.calling_number
-              : null,
-          state: typeof meta.state === 'string' ? meta.state : 'Lagos',
-          city: typeof meta.city === 'string' ? meta.city : 'Lagos',
-          account_role:
-            meta.account_role === 'buyer' ||
-            meta.account_role === 'seller' ||
-            meta.account_role === 'both'
-              ? meta.account_role
-              : 'both',
+          whatsapp_number: null,
+          calling_number: null,
+          state: 'Lagos',
+          city: 'Lagos',
+          account_role: 'both',
+          avatar_url: googleAvatar,
           show_whatsapp_publicly: false,
           show_calling_publicly: false,
-          verification_status: 'unverified',
-          is_admin: false,
+          onboarding_completed: false,
+          onboarding_completed_at: null,
         },
         { onConflict: 'id' }
       )
@@ -218,6 +228,43 @@ export function MarketplaceProvider({
       setUserProfile(inserted as UserProfileRow);
     }
   }, []);
+
+  const signInWithGoogle = useCallback(
+    async (nextPath?: string): Promise<{ error?: string }> => {
+      const supabase = createSupabaseBrowserClient();
+      if (!supabase) {
+        return {
+          error:
+            'Supabase is not yet connected. Configure NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in your environment.',
+        };
+      }
+
+      const safeNext = sanitizeRedirectPath(nextPath, '/account?tab=dashboard');
+      const origin =
+        typeof window !== 'undefined' ? window.location.origin : '';
+      const redirectTo = `${origin}/auth/callback?next=${encodeURIComponent(
+        safeNext
+      )}`;
+
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'select_account',
+          },
+        },
+      });
+
+      if (error) {
+        return { error: error.message };
+      }
+
+      return {};
+    },
+    []
+  );
 
   const refreshMarketplaceData = useCallback(async () => {
     try {
@@ -357,7 +404,7 @@ export function MarketplaceProvider({
     };
   }, [fetchProfileForUser]);
 
-  // Fetch Stage 3 Supabase marketplace listings & requests on mount
+  // Fetch marketplace listings & requests on mount
   useEffect(() => {
     queueMicrotask(() => {
       refreshMarketplaceData();
@@ -426,6 +473,7 @@ export function MarketplaceProvider({
   ): Promise<{
     listing: Listing;
     persistedToSupabase: boolean;
+    onboardingRequired?: boolean;
     error?: string;
   }> => {
     try {
@@ -443,13 +491,23 @@ export function MarketplaceProvider({
         return { listing: created, persistedToSupabase: true };
       }
 
+      if (result.code === 'ONBOARDING_REQUIRED') {
+        const fallback = addListing(input);
+        return {
+          listing: fallback,
+          persistedToSupabase: false,
+          onboardingRequired: true,
+          error: result.error,
+        };
+      }
+
       const fallback = addListing(input);
       return {
         listing: fallback,
         persistedToSupabase: false,
         error:
           result.error ||
-          'Saved to local preview because Supabase session or Stage 3 table migration is pending.',
+          'Saved to local preview because you are not signed in with a completed Selplase profile.',
       };
     } catch {
       const fallback = addListing(input);
@@ -472,6 +530,7 @@ export function MarketplaceProvider({
   ): Promise<{
     request: BuyerRequest;
     persistedToSupabase: boolean;
+    onboardingRequired?: boolean;
     error?: string;
   }> => {
     try {
@@ -489,13 +548,23 @@ export function MarketplaceProvider({
         return { request: created, persistedToSupabase: true };
       }
 
+      if (result.code === 'ONBOARDING_REQUIRED') {
+        const fallback = addBuyerRequest(input);
+        return {
+          request: fallback,
+          persistedToSupabase: false,
+          onboardingRequired: true,
+          error: result.error,
+        };
+      }
+
       const fallback = addBuyerRequest(input);
       return {
         request: fallback,
         persistedToSupabase: false,
         error:
           result.error ||
-          'Saved to local preview because Supabase session or Stage 3 table migration is pending.',
+          'Saved to local preview because you are not signed in with a completed Selplase profile.',
       };
     } catch {
       const fallback = addBuyerRequest(input);
@@ -539,6 +608,7 @@ export function MarketplaceProvider({
   }): Promise<{
     offer: SellerOffer;
     persistedToSupabase: boolean;
+    onboardingRequired?: boolean;
     error?: string;
   }> => {
     try {
@@ -570,13 +640,23 @@ export function MarketplaceProvider({
         return { offer: created, persistedToSupabase: true };
       }
 
+      if (result.code === 'ONBOARDING_REQUIRED') {
+        const fallback = submitOfferForRequest(params);
+        return {
+          offer: fallback,
+          persistedToSupabase: false,
+          onboardingRequired: true,
+          error: result.error,
+        };
+      }
+
       const fallback = submitOfferForRequest(params);
       return {
         offer: fallback,
         persistedToSupabase: false,
         error:
           result.error ||
-          'Saved to local preview because you are signed out, offering on a demo request, or Stage 3 SQL migration is pending.',
+          'Saved to local preview because you are signed out, incomplete in onboarding, or offering on a demo request.',
       };
     } catch {
       const fallback = submitOfferForRequest(params);
@@ -604,7 +684,7 @@ export function MarketplaceProvider({
       sellerName: params.sellerName,
       senderName: params.senderName.trim() || 'You (Demo Buyer)',
       messageText: params.messageText.trim(),
-      replyPreview: `Browser Demo Auto-Reply from ${params.sellerName}: Direct messaging remains mocked in Stage 3. Connect via WhatsApp or Call for real-time inquiries.`,
+      replyPreview: `Browser Demo Auto-Reply from ${params.sellerName}: Direct messaging remains mocked in Stage 4. Connect via WhatsApp or Call for real-time inquiries.`,
       createdAt: new Date().toISOString(),
     };
 
@@ -621,6 +701,8 @@ export function MarketplaceProvider({
     return newMessage;
   };
 
+  const isOnboardingComplete = isProfileOnboardingComplete(userProfile);
+
   return (
     <MarketplaceContext.Provider
       value={{
@@ -629,6 +711,8 @@ export function MarketplaceProvider({
         authLoading,
         authUser,
         userProfile,
+        isOnboardingComplete,
+        signInWithGoogle,
         refreshUserProfile,
         refreshMarketplaceData,
         signOutUser,

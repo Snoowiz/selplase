@@ -19,9 +19,9 @@ export async function generateMetadata({
 
   if (!item) {
     return {
-      title: 'Listing Details | SELPLAS Marketplace',
+      title: 'Listing Details | Selplase Marketplace',
       description:
-        'View product and service details on SELPLAS — Find it. Sell it. Request it.',
+        'View product and service details on Selplase — Find it. Sell it. Request it.',
     };
   }
 
@@ -30,7 +30,7 @@ export async function generateMetadata({
       ? `From ${formatNaira(item.priceNaira)}`
       : formatNaira(item.priceNaira);
 
-  const ogTitle = `${item.title} (${priceFormatted}) — SELPLAS`;
+  const ogTitle = `${item.title} (${priceFormatted}) — Selplase`;
   const ogDescription = `${item.type.toUpperCase()} in ${item.area}, ${
     item.state
   } · ${item.condition}. ${item.description}`;
@@ -43,7 +43,7 @@ export async function generateMetadata({
       description: ogDescription,
       type: 'website',
       locale: 'en_NG',
-      siteName: 'SELPLAS Nigeria',
+      siteName: 'Selplase Nigeria',
     },
     twitter: {
       card: 'summary_large_image',

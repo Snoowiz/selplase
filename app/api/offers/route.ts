@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { isProfileOnboardingComplete } from '@/lib/utils/profile-utils';
 import {
   type DbRequestOfferRow,
   mapDbOfferToSellerOffer,
   validateOfferSubmission,
+  validateOfferUpdate,
 } from '@/lib/utils/marketplace-mappers';
+import type { UserProfileRow } from '@/lib/types/profile';
 
 /**
  * GET /api/offers
- * Stage 3: Returns `public.request_offers` visible to the authenticated user
- * (offers submitted by this seller OR offers received on this user's buyer requests, enforced by RLS).
+ * Returns `public.request_offers` visible to the authenticated user.
  */
 export async function GET() {
   const supabase = await createSupabaseServerClient();
@@ -83,15 +85,15 @@ export async function GET() {
     meta: {
       total: mapped.length,
       dbReady: true,
-      stage: 'stage-3-supabase-offers',
+      stage: 'stage-4-selplase-offers',
     },
   });
 }
 
 /**
  * POST /api/offers
- * Stage 3: Authenticates the seller, verifies they do not own the target buyer request,
- * and inserts a new offer into `public.request_offers`.
+ * Requires both an authenticated Supabase session AND a completed Selplase onboarding profile.
+ * Blocks self-offers and persists to `public.request_offers`.
  */
 export async function POST(req: NextRequest) {
   const supabase = await createSupabaseServerClient();
@@ -114,11 +116,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         error:
-          'Unauthorized: Please sign in to your SELPLAS account to submit an "I Have This" offer.',
+          'Unauthorized: Please sign in to your Selplase account to submit an "I Have This" offer.',
       },
       { status: 401 }
     );
   }
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  const onboardingDone = isProfileOnboardingComplete(
+    profile as UserProfileRow | null
+  );
 
   try {
     const body = await req.json();
@@ -147,11 +159,15 @@ export async function POST(req: NextRequest) {
       offeredPriceNaira,
       location,
       note,
+      sellerOnboardingCompleted: onboardingDone,
     });
 
     if (!validation.valid) {
       return NextResponse.json(
-        { error: validation.error },
+        {
+          error: validation.error,
+          code: !onboardingDone ? 'ONBOARDING_REQUIRED' : undefined,
+        },
         { status: validation.status }
       );
     }
@@ -175,17 +191,11 @@ export async function POST(req: NextRequest) {
         {
           error:
             insertError?.message ||
-            'Failed to insert offer into public.request_offers. Ensure the request exists in Supabase and Stage 3 SQL migration has been applied.',
+            'Failed to insert offer into public.request_offers. Ensure the request exists in Supabase and Stage 3 & 4 SQL migrations have been applied.',
         },
         { status: 400 }
       );
     }
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('display_name, whatsapp_number, show_whatsapp_publicly')
-      .eq('id', user.id)
-      .maybeSingle();
 
     const mapped = mapDbOfferToSellerOffer({
       ...(inserted as DbRequestOfferRow),
@@ -201,12 +211,124 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json(
-      { data: mapped, stage: 'stage-3-supabase-offers', persisted: true },
+      { data: mapped, stage: 'stage-4-selplase-offers', persisted: true },
       { status: 201 }
     );
   } catch {
     return NextResponse.json(
       { error: 'Invalid JSON request payload' },
+      { status: 400 }
+    );
+  }
+}
+
+/**
+ * PATCH /api/offers
+ * Role-specific offer update endpoint enforcing participant field boundaries:
+ * - Sellers may only update offer terms while status is 'pending' (never status).
+ * - Buyers (request owners) may only transition status ('accepted' | 'declined') (never price/terms).
+ */
+export async function PATCH(req: NextRequest) {
+  const supabase = await createSupabaseServerClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: 'Supabase is not configured.' },
+      { status: 503 }
+    );
+  }
+
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return NextResponse.json(
+      { error: 'Unauthorized: Please sign in to update an offer.' },
+      { status: 401 }
+    );
+  }
+
+  try {
+    const body = await req.json();
+    const offerId = String(body.offerId || '').trim();
+    const updates =
+      typeof body.updates === 'object' && body.updates !== null
+        ? (body.updates as Record<string, unknown>)
+        : {};
+
+    if (!offerId) {
+      return NextResponse.json(
+        { error: 'offerId is required.' },
+        { status: 400 }
+      );
+    }
+
+    const { data: existingOffer } = await supabase
+      .from('request_offers')
+      .select('id, request_id, seller_id, status')
+      .eq('id', offerId)
+      .maybeSingle();
+
+    if (!existingOffer) {
+      return NextResponse.json(
+        { error: 'Offer not found or access denied.' },
+        { status: 404 }
+      );
+    }
+
+    const { data: parentRequest } = await supabase
+      .from('buyer_requests')
+      .select('buyer_id')
+      .eq('id', existingOffer.request_id)
+      .maybeSingle();
+
+    if (!parentRequest) {
+      return NextResponse.json(
+        { error: 'Parent buyer request not found.' },
+        { status: 404 }
+      );
+    }
+
+    const check = validateOfferUpdate({
+      authenticatedUserId: user.id,
+      existingOffer: existingOffer as {
+        id: string;
+        request_id: string;
+        seller_id: string;
+        status: 'pending' | 'accepted' | 'declined';
+      },
+      buyerRequestOwnerId: String(parentRequest.buyer_id),
+      updates,
+    });
+
+    if (!check.valid || !check.sanitizedUpdates) {
+      return NextResponse.json(
+        { error: check.error || 'Forbidden offer update.' },
+        { status: check.status }
+      );
+    }
+
+    const { data: updated, error: updateError } = await supabase
+      .from('request_offers')
+      .update(check.sanitizedUpdates)
+      .eq('id', offerId)
+      .select('*')
+      .single();
+
+    if (updateError || !updated) {
+      return NextResponse.json(
+        { error: updateError?.message || 'Failed to update offer.' },
+        { status: 400 }
+      );
+    }
+
+    return NextResponse.json({
+      data: mapDbOfferToSellerOffer(updated as DbRequestOfferRow),
+    });
+  } catch {
+    return NextResponse.json(
+      { error: 'Invalid JSON request payload.' },
       { status: 400 }
     );
   }

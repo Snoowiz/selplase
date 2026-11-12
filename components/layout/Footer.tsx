@@ -11,7 +11,7 @@ export function Footer() {
               href="/"
               className="text-xl font-extrabold tracking-tight text-slate-900 font-display"
             >
-              SELPLAS
+              Selplase
             </Link>
             <p className="mt-2.5 text-xs text-slate-500 leading-relaxed">
               Find it. Sell it. Request it. Nigeria&apos;s modern marketplace
@@ -123,12 +123,15 @@ export function Footer() {
 
         <div className="pt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
           <p>
-            © {new Date().getFullYear()} SELPLAS Nigeria. Stage 1 Foundation
-            Preview — All sample listings and profiles are fictional demonstration data.
+            © {new Date().getFullYear()} Selplase Nigeria. Find it. Sell it.
+            Request it.
           </p>
           <div className="flex items-center gap-5">
             <Link href="/account" className="hover:text-slate-900 transition-colors">
-              Account & Stage 2 Roadmap
+              Account &amp; Profile
+            </Link>
+            <Link href="/onboarding" className="hover:text-slate-900 transition-colors">
+              Onboarding
             </Link>
             <Link href="/explore" className="hover:text-slate-900 transition-colors">
               Safety Guidelines

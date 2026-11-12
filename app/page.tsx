@@ -67,9 +67,8 @@ export default function HomePage() {
           {/* Left Column: Headline, Search & Primary Actions */}
           <div className="lg:col-span-7 space-y-6">
             <p className="text-xs font-medium text-blue-700 leading-relaxed">
-              Nigeria&apos;s Marketplace for Products, Services &amp; Buyer
-              Requests <span aria-hidden="true" className="mx-1 text-slate-400">·</span>{' '}
-              <span className="text-slate-500">Stage 1 Demo Preview</span>
+              Selplase · Nigeria&apos;s Marketplace for Products, Services &amp;
+              Buyer Requests
             </p>
 
             <h1 className="text-4xl sm:text-5xl lg:text-[3.5rem] font-extrabold tracking-tight text-slate-950 leading-[1.08] font-display text-balance">
@@ -328,12 +327,12 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* 2. POPULAR ON SELPLAS (FEATURED PRODUCTS & SERVICES) */}
+      {/* 2. POPULAR ON SELPLASE (FEATURED PRODUCTS & SERVICES) */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
           <div>
             <h2 className="text-2xl sm:text-3xl font-bold text-slate-950 font-display">
-              Popular on SELPLAS
+              Popular on Selplase
             </h2>
             <p className="text-sm text-slate-600 mt-1">
               Discover featured products and trusted professional services across

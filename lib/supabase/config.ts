@@ -1,5 +1,5 @@
 /**
- * SELPLAS — Supabase Environment & Configuration Helper
+ * Selplase — Supabase Environment & Configuration Helper
  *
  * Supports the current Supabase publishable-key convention
  * (`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY`)

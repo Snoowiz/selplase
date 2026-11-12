@@ -40,7 +40,7 @@ export function ContactSellerModal() {
   if (!activeContactListing) return null;
 
   const origin =
-    typeof window !== 'undefined' ? window.location.origin : 'https://selplas.ng';
+    typeof window !== 'undefined' ? window.location.origin : 'https://selplase.ng';
   const listingUrl = `${origin}/listings/${activeContactListing.id}`;
   const priceText = formatNaira(activeContactListing.priceNaira);
 
@@ -311,7 +311,7 @@ export function ContactSellerModal() {
         <div className="mt-4 p-3 rounded-2xl bg-amber-50/80 border border-amber-200/80 flex items-start gap-2.5 text-xs text-amber-900">
           <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
           <p className="text-amber-800/90 leading-relaxed">
-            <strong>SELPLAS Safety Reminder:</strong> Meet the seller in an open
+            <strong>Selplase Safety Reminder:</strong> Meet the seller in an open
             public location to inspect the item before transferring funds.
           </p>
         </div>

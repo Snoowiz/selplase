@@ -31,14 +31,15 @@ test('buildWhatsAppShareUrl encodes listing title, Naira price, location, and UR
     title: 'iPhone 16 Pro Max 256GB',
     priceText: '₦1,350,000',
     location: 'Lekki Phase 1, Lagos',
-    url: 'https://selplas.ng/listings/lst-iphone-16-pro-max',
+    url: 'https://selplase.ng/listings/lst-iphone-16-pro-max',
     type: 'product',
   });
   assert.ok(shareUrl.startsWith('https://wa.me/?text='));
   const decoded = decodeURIComponent(shareUrl.replace('https://wa.me/?text=', ''));
   assert.ok(decoded.includes('iPhone 16 Pro Max 256GB'));
   assert.ok(decoded.includes('₦1,350,000'));
-  assert.ok(decoded.includes('https://selplas.ng/listings/lst-iphone-16-pro-max'));
+  assert.ok(decoded.includes('https://selplase.ng/listings/lst-iphone-16-pro-max'));
+  assert.ok(decoded.includes('Selplase'));
 });
 
 test('filterListings filters by keyword, type, Nigerian state, and price range', () => {

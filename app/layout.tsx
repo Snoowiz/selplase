@@ -6,20 +6,20 @@ import { MobileBottomNav } from '@/components/layout/MobileBottomNav';
 import { Footer } from '@/components/layout/Footer';
 
 export const metadata: Metadata = {
-  title: 'SELPLAS — Find it. Sell it. Request it. | Nigeria Marketplace',
+  title: 'Selplase — Find it. Sell it. Request it. | Nigeria Marketplace',
   description:
-    "SELPLAS is Nigeria's modern marketplace where people can buy products, sell products, offer services, request products they cannot find, and connect directly with sellers.",
+    "Selplase is Nigeria's modern marketplace where people can buy products, sell products, offer services, request products they cannot find, and connect directly with sellers.",
   openGraph: {
-    title: 'SELPLAS — Find it. Sell it. Request it.',
+    title: 'Selplase — Find it. Sell it. Request it.',
     description:
       "Nigeria's modern marketplace to buy products, offer services, post buyer requests, and connect directly with sellers via WhatsApp.",
     type: 'website',
     locale: 'en_NG',
-    siteName: 'SELPLAS Marketplace',
+    siteName: 'Selplase Marketplace',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'SELPLAS — Find it. Sell it. Request it.',
+    title: 'Selplase — Find it. Sell it. Request it.',
     description:
       "Nigeria's modern marketplace to buy products, offer services, post buyer requests, and connect directly with sellers.",
   },

@@ -1,6 +1,6 @@
 /**
- * Shared TypeScript types for SELPLAS Marketplace (Web & Future React Native Expo App)
- * Designed to map cleanly to Supabase PostgreSQL tables in Stage 2:
+ * Shared TypeScript types for Selplase Marketplace (Web & Future React Native Expo App)
+ * Designed to map cleanly to Supabase PostgreSQL tables:
  * - public.profiles
  * - public.listings
  * - public.buyer_requests

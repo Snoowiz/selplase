@@ -2,7 +2,9 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import {
+  AlertCircle,
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
@@ -31,7 +33,8 @@ import { ProductVisual } from '@/components/marketplace/ProductVisual';
 
 export default function CreateListingPage() {
   const router = useRouter();
-  const { authUser, userProfile, publishListing } = useMarketplace();
+  const { authUser, userProfile, isOnboardingComplete, publishListing } =
+    useMarketplace();
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [type, setType] = useState<ListingType>('product');
@@ -187,6 +190,15 @@ export default function CreateListingPage() {
     });
     setSubmitting(false);
 
+    if (result.onboardingRequired) {
+      setErrors({
+        onboarding:
+          result.error ||
+          'Please complete your Selplase onboarding profile before publishing listings.',
+      });
+      return;
+    }
+
     setPersistedToDb(result.persistedToSupabase);
     setPublishFeedback(result.error || null);
     setPublishedId(result.listing.id);
@@ -209,7 +221,7 @@ export default function CreateListingPage() {
             </p>
             <h1 className="text-2xl font-extrabold text-slate-950 font-display mt-1">
               {persistedToDb
-                ? 'Listing Live on SELPLAS Marketplace'
+                ? 'Listing Live on Selplase Marketplace'
                 : 'Saved to Local Marketplace Preview'}
             </h1>
             <p className="text-sm text-slate-600 mt-2 max-w-md mx-auto">
@@ -256,9 +268,9 @@ export default function CreateListingPage() {
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Page Heading */}
-      <div className="mb-8">
+      <div className="mb-6">
         <p className="text-xs font-semibold text-blue-600">
-          SELPLAS Seller Studio
+          Selplase Seller Studio
         </p>
         <h1 className="text-3xl font-extrabold text-slate-950 font-display mt-1">
           Create a New Listing
@@ -267,6 +279,30 @@ export default function CreateListingPage() {
           Publish a physical product or professional service in 3 simple steps.
         </p>
       </div>
+
+      {/* Onboarding / Authentication Access Notice */}
+      {authUser && !isOnboardingComplete && (
+        <div className="mb-6 rounded-2xl bg-amber-50 border border-amber-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">
+                Complete Onboarding Before Publishing Real Listings
+              </p>
+              <p className="text-amber-800 mt-0.5">
+                Your WhatsApp number and Nigerian location are required to
+                publish real listings on Selplase.
+              </p>
+            </div>
+          </div>
+          <Link
+            href="/onboarding?next=/sell"
+            className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold whitespace-nowrap shrink-0"
+          >
+            Complete Onboarding →
+          </Link>
+        </div>
+      )}
 
       {/* Stepper Progress Bar */}
       <div className="grid grid-cols-3 gap-3 mb-8">
@@ -307,7 +343,7 @@ export default function CreateListingPage() {
           <div className="space-y-6">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-2">
-                What are you listing on SELPLAS?
+                What are you listing on Selplase?
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button

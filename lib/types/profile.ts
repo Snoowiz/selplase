@@ -1,5 +1,5 @@
 /**
- * SELPLAS — Stage 2 User Profile & Supabase Database Types
+ * Selplase — Stage 2–4 User Profile, Onboarding & Supabase Database Types
  */
 
 export type AccountRole = 'buyer' | 'seller' | 'both';
@@ -24,6 +24,8 @@ export interface UserProfileRow {
   show_calling_publicly: boolean;
   verification_status: VerificationStatus;
   is_admin: boolean;
+  onboarding_completed?: boolean;
+  onboarding_completed_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -59,6 +61,17 @@ export interface PermittedProfileUpdateInput {
   avatar_url?: string | null;
   show_whatsapp_publicly?: boolean;
   show_calling_publicly?: boolean;
+  onboarding_completed?: boolean;
+  onboarding_completed_at?: string | null;
+}
+
+export interface OnboardingFormInput {
+  displayName: string;
+  whatsappNumber: string;
+  callingNumber?: string;
+  state: string;
+  city: string;
+  accountRole: AccountRole;
 }
 
 export interface RegistrationFormInput {
