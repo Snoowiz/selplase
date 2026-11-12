@@ -1,0 +1,6 @@
+{
+  "name": "SELPLAS",
+  "description": "Find it. Sell it. Request it. Nigeria's modern marketplace to buy products, offer services, post buyer requests, and connect directly with sellers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
