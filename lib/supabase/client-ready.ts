@@ -46,6 +46,7 @@ export function getStage3Status() {
       'supabase/migrations/20261112000001_user_profiles_and_rls.sql',
       'supabase/migrations/20261112000002_marketplace_listings_requests_offers.sql',
       'supabase/migrations/20261112000003_stage4_onboarding_and_security_hardening.sql',
+      'supabase/migrations/20261112000004_stage4_1_stabilisation_and_security.sql',
     ],
   };
 }

@@ -6,6 +6,7 @@ import React, {
   useState,
   useEffect,
   useCallback,
+  useRef,
 } from 'react';
 import type { User } from '@supabase/supabase-js';
 import type {
@@ -27,6 +28,8 @@ import {
   buildSellerOfferEntity,
 } from '@/lib/supabase/client-ready';
 import {
+  buildInitialMissingProfileInsert,
+  classifyProfileFetchOutcome,
   isProfileOnboardingComplete,
   sanitizeRedirectPath,
 } from '@/lib/utils/profile-utils';
@@ -136,6 +139,7 @@ export function MarketplaceProvider({
   const [marketplaceDbReady, setMarketplaceDbReady] = useState<boolean>(false);
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfileRow | null>(null);
+  const profileInsertInFlightRef = useRef<Set<string>>(new Set());
 
   const [listings, setListings] = useState<Listing[]>(INITIAL_LISTINGS);
   const [buyerRequests, setBuyerRequests] = useState<BuyerRequest[]>(
@@ -178,54 +182,71 @@ export function MarketplaceProvider({
       .eq('id', user.id)
       .maybeSingle();
 
-    if (!error && data) {
-      setUserProfile(data as UserProfileRow);
+    const outcome = classifyProfileFetchOutcome({
+      data: data as UserProfileRow | null,
+      error,
+    });
+
+    if (outcome.status === 'found' && outcome.profile) {
+      setUserProfile(outcome.profile);
       return;
     }
 
-    const meta = user.user_metadata || {};
-    const fallbackDisplayName =
-      (typeof meta.display_name === 'string' &&
-        meta.display_name.trim().length >= 2 &&
-        meta.display_name.trim()) ||
-      (typeof meta.full_name === 'string' &&
-        meta.full_name.trim().length >= 2 &&
-        meta.full_name.trim()) ||
-      (typeof meta.name === 'string' &&
-        meta.name.trim().length >= 2 &&
-        meta.name.trim()) ||
-      (user.email || 'Selplase Member').split('@')[0];
+    if (outcome.status === 'auth_expired') {
+      setAuthUser(null);
+      setUserProfile(null);
+      return;
+    }
 
-    const googleAvatar =
-      (typeof meta.avatar_url === 'string' && meta.avatar_url.trim()) ||
-      (typeof meta.picture === 'string' && meta.picture.trim()) ||
-      null;
+    // Never overwrite an existing profile or insert incomplete defaults on
+    // database connection failures, RLS permission errors, or unexpected errors.
+    if (
+      outcome.status === 'permission_denied' ||
+      outcome.status === 'connection_error' ||
+      outcome.status === 'unexpected_error'
+    ) {
+      return;
+    }
 
-    const { data: inserted } = await supabase
-      .from('profiles')
-      .upsert(
-        {
-          id: user.id,
-          display_name: fallbackDisplayName,
-          email: user.email || '',
-          whatsapp_number: null,
-          calling_number: null,
-          state: 'Lagos',
-          city: 'Lagos',
-          account_role: 'both',
-          avatar_url: googleAvatar,
-          show_whatsapp_publicly: false,
-          show_calling_publicly: false,
-          onboarding_completed: false,
-          onboarding_completed_at: null,
-        },
-        { onConflict: 'id' }
-      )
-      .select('*')
-      .maybeSingle();
+    // Outcome is genuinely 'missing' (`!error && data === null`).
+    // Guard against duplicate concurrent inserts for the same user ID.
+    if (profileInsertInFlightRef.current.has(user.id)) {
+      return;
+    }
 
-    if (inserted) {
-      setUserProfile(inserted as UserProfileRow);
+    profileInsertInFlightRef.current.add(user.id);
+    try {
+      const initialRow = buildInitialMissingProfileInsert({
+        userId: user.id,
+        email: user.email,
+        userMetadata: (user.user_metadata || {}) as Record<string, unknown>,
+      });
+
+      const { data: inserted, error: insertError } = await supabase
+        .from('profiles')
+        .insert(initialRow)
+        .select('*')
+        .maybeSingle();
+
+      if (!insertError && inserted) {
+        setUserProfile(inserted as UserProfileRow);
+        return;
+      }
+
+      // If another request or database trigger inserted the row concurrently,
+      // fetch the existing row without overwriting any fields.
+      if (insertError?.code === '23505') {
+        const { data: refetched, error: refetchError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .maybeSingle();
+        if (!refetchError && refetched) {
+          setUserProfile(refetched as UserProfileRow);
+        }
+      }
+    } finally {
+      profileInsertInFlightRef.current.delete(user.id);
     }
   }, []);
 

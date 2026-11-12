@@ -40,7 +40,9 @@ function OnboardingFormInner({ nextPath }: { nextPath: string }) {
   const [displayName, setDisplayName] = useState('');
   const [whatsappNumber, setWhatsappNumber] = useState('');
   const [callingNumber, setCallingNumber] = useState('');
-  const [state, setState] = useState('Lagos');
+  // Stage 4.1: Do not automatically treat "Lagos" as a user's confirmed location
+  // unless they have previously completed onboarding or actively select it.
+  const [state, setState] = useState('');
   const [city, setCity] = useState('');
   const [accountRole, setAccountRole] = useState<AccountRole>('both');
 
@@ -50,7 +52,8 @@ function OnboardingFormInner({ nextPath }: { nextPath: string }) {
   const [submitting, setSubmitting] = useState(false);
   const [googleSigningIn, setGoogleSigningIn] = useState(false);
 
-  // Pre-fill from Google metadata or existing partial profile
+  // Pre-fill display name from Google metadata, and only pre-fill location
+  // when the user has already confirmed and completed onboarding previously.
   useEffect(() => {
     const metadata = (authUser?.user_metadata || {}) as Record<string, unknown>;
     const googleName =
@@ -65,10 +68,14 @@ function OnboardingFormInner({ nextPath }: { nextPath: string }) {
         setDisplayName((prev) => prev || userProfile.display_name || googleName);
         setWhatsappNumber((prev) => prev || userProfile.whatsapp_number || '');
         setCallingNumber((prev) => prev || userProfile.calling_number || '');
-        if (userProfile.state && NIGERIAN_STATES.includes(userProfile.state)) {
-          setState(userProfile.state);
+
+        if (userProfile.onboarding_completed) {
+          if (userProfile.state && NIGERIAN_STATES.includes(userProfile.state)) {
+            setState((prev) => prev || userProfile.state);
+          }
+          setCity((prev) => prev || userProfile.city || '');
         }
-        setCity((prev) => prev || userProfile.city || '');
+
         if (userProfile.account_role) {
           setAccountRole(userProfile.account_role);
         }
@@ -118,7 +125,7 @@ function OnboardingFormInner({ nextPath }: { nextPath: string }) {
 
     if (!authUser) {
       setFormError(
-        `Onboarding details validated (WhatsApp normalised to ${validation.normalizedWhatsapp}). Please sign in with Google first to save your Selplase profile.`
+        `Onboarding details validated (WhatsApp normalised to ${validation.normalizedWhatsapp}, location confirmed as ${city.trim()}, ${state}). Please sign in with Google first to save your Selplase profile.`
       );
       return;
     }
@@ -140,11 +147,12 @@ function OnboardingFormInner({ nextPath }: { nextPath: string }) {
 
       const result = await response.json();
       if (!response.ok) {
-        if (result.fieldErrors) {
-          setFieldErrors(result.fieldErrors);
+        if (result.fieldErrors || result.details) {
+          setFieldErrors(result.fieldErrors || result.details);
         }
         setFormError(
-          result.error || 'Could not complete onboarding. Please check your details.'
+          result.error ||
+            'Could not complete onboarding. Please check your details.'
         );
         setSubmitting(false);
         return;
@@ -249,8 +257,15 @@ function OnboardingFormInner({ nextPath }: { nextPath: string }) {
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="e.g. Chidinma Okafor or Chidinma Gadgets"
-              className="w-full px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+              className={`w-full px-4 py-2.5 rounded-xl bg-white border text-sm text-slate-900 focus:outline-none focus:border-blue-600 ${
+                fieldErrors.displayName ? 'border-rose-400' : 'border-slate-200'
+              }`}
             />
+            {fieldErrors.displayName && (
+              <p className="text-[11px] font-medium text-rose-600 mt-1">
+                {fieldErrors.displayName}
+              </p>
+            )}
             <p className="text-[11px] text-slate-500 mt-1">
               Pre-filled from your Google account when available. You can edit
               this anytime.
@@ -267,7 +282,13 @@ function OnboardingFormInner({ nextPath }: { nextPath: string }) {
                 >
                   2. WhatsApp Phone Number (Nigeria +234) *
                 </label>
-                <div className="flex items-center rounded-xl bg-white border border-slate-200 focus-within:border-blue-600 overflow-hidden">
+                <div
+                  className={`flex items-center rounded-xl bg-white border focus-within:border-blue-600 overflow-hidden ${
+                    fieldErrors.whatsappNumber
+                      ? 'border-rose-400'
+                      : 'border-slate-200'
+                  }`}
+                >
                   <span className="px-3 py-2.5 bg-slate-100 border-r border-slate-200 text-xs font-mono font-semibold text-slate-700 flex items-center gap-1 shrink-0">
                     <Phone className="w-3.5 h-3.5 text-emerald-600" />
                     NG +234
@@ -282,6 +303,11 @@ function OnboardingFormInner({ nextPath }: { nextPath: string }) {
                     className="w-full px-3.5 py-2.5 text-sm font-mono text-slate-900 focus:outline-none"
                   />
                 </div>
+                {fieldErrors.whatsappNumber && (
+                  <p className="text-[11px] font-medium text-rose-600 mt-1">
+                    {fieldErrors.whatsappNumber}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -297,8 +323,17 @@ function OnboardingFormInner({ nextPath }: { nextPath: string }) {
                   value={callingNumber}
                   onChange={(e) => setCallingNumber(e.target.value)}
                   placeholder="0809 000 2233"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm font-mono text-slate-900 focus:outline-none focus:border-blue-600"
+                  className={`w-full px-3.5 py-2.5 rounded-xl bg-white border text-sm font-mono text-slate-900 focus:outline-none focus:border-blue-600 ${
+                    fieldErrors.callingNumber
+                      ? 'border-rose-400'
+                      : 'border-slate-200'
+                  }`}
                 />
+                {fieldErrors.callingNumber && (
+                  <p className="text-[11px] font-medium text-rose-600 mt-1">
+                    {fieldErrors.callingNumber}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -323,7 +358,7 @@ function OnboardingFormInner({ nextPath }: { nextPath: string }) {
           <div className="space-y-3 pt-2 border-t border-slate-100">
             <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
               <MapPin className="w-4 h-4 text-blue-600" />
-              <span>3. Your Primary Location in Nigeria *</span>
+              <span>3. Confirm Your Primary Location in Nigeria *</span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -336,16 +371,25 @@ function OnboardingFormInner({ nextPath }: { nextPath: string }) {
                 </label>
                 <select
                   id="onboarding-state"
+                  required
                   value={state}
                   onChange={(e) => setState(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  className={`w-full px-3.5 py-2.5 rounded-xl bg-white border text-sm text-slate-900 focus:outline-none focus:border-blue-600 ${
+                    fieldErrors.state ? 'border-rose-400' : 'border-slate-200'
+                  }`}
                 >
+                  <option value="">Select your Nigerian State...</option>
                   {NIGERIAN_STATES.map((st) => (
                     <option key={st} value={st}>
                       {st}
                     </option>
                   ))}
                 </select>
+                {fieldErrors.state && (
+                  <p className="text-[11px] font-medium text-rose-600 mt-1">
+                    {fieldErrors.state}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -362,8 +406,15 @@ function OnboardingFormInner({ nextPath }: { nextPath: string }) {
                   value={city}
                   onChange={(e) => setCity(e.target.value)}
                   placeholder="e.g. Lekki Phase 1, Ikeja, Wuse 2"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  className={`w-full px-3.5 py-2.5 rounded-xl bg-white border text-sm text-slate-900 focus:outline-none focus:border-blue-600 ${
+                    fieldErrors.city ? 'border-rose-400' : 'border-slate-200'
+                  }`}
                 />
+                {fieldErrors.city && (
+                  <p className="text-[11px] font-medium text-rose-600 mt-1">
+                    {fieldErrors.city}
+                  </p>
+                )}
               </div>
             </div>
           </div>

@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildInitialMissingProfileInsert,
+  buildOnboardingProfileUpdate,
+  classifyProfileFetchOutcome,
+  getOnboardingCompletionSummary,
   isProfileOnboardingComplete,
   normalizeNigerianPhone,
   sanitizeRedirectPath,
@@ -10,6 +14,40 @@ import {
   validateRegistrationInput,
 } from './profile-utils';
 import type { UserProfileRow } from '../types/profile';
+
+test('getOnboardingCompletionSummary calculates step-by-step progress for incomplete and complete profiles', () => {
+  const emptySummary = getOnboardingCompletionSummary(null);
+  assert.equal(emptySummary.isComplete, false);
+  assert.equal(emptySummary.completedCount, 0);
+  assert.equal(emptySummary.totalSteps, 4);
+  assert.equal(emptySummary.progressPercent, 0);
+
+  const partialGoogleSummary = getOnboardingCompletionSummary({
+    display_name: 'Chidinma Okafor',
+    whatsapp_number: null,
+    state: '',
+    city: '',
+    account_role: 'both',
+    onboarding_completed: false,
+  });
+  assert.equal(partialGoogleSummary.isComplete, false);
+  assert.equal(partialGoogleSummary.completedCount, 1);
+  assert.equal(partialGoogleSummary.progressPercent, 25);
+  assert.equal(partialGoogleSummary.steps[0].completed, true);
+  assert.equal(partialGoogleSummary.steps[1].completed, false);
+
+  const completeSummary = getOnboardingCompletionSummary({
+    display_name: 'Chidinma Okafor',
+    whatsapp_number: '+2348031234567',
+    state: 'Lagos',
+    city: 'Lekki Phase 1',
+    account_role: 'both',
+    onboarding_completed: true,
+  });
+  assert.equal(completeSummary.isComplete, true);
+  assert.equal(completeSummary.completedCount, 4);
+  assert.equal(completeSummary.progressPercent, 100);
+});
 
 test('normalizeNigerianPhone converts local 080/081/090/070 numbers to +234 E.164 format', () => {
   const local = normalizeNigerianPhone('0803 000 1122');
@@ -59,7 +97,7 @@ test('validateRegistrationInput checks password match and normalises Nigerian ph
   assert.equal(valid.normalizedCalling, '+2348090002233');
 });
 
-test('validateOnboardingInput enforces compulsory WhatsApp number, location, display name, and role', () => {
+test('validateOnboardingInput enforces compulsory WhatsApp number, confirmed Nigerian state, city, display name, and role', () => {
   const missingWhatsapp = validateOnboardingInput({
     displayName: 'Adebayo Ogunlesi',
     whatsappNumber: '',
@@ -69,6 +107,17 @@ test('validateOnboardingInput enforces compulsory WhatsApp number, location, dis
   });
   assert.equal(missingWhatsapp.valid, false);
   assert.ok(missingWhatsapp.errors.whatsappNumber);
+
+  // Stage 4.1 Task 5: Empty or unconfirmed state must be rejected
+  const unconfirmedState = validateOnboardingInput({
+    displayName: 'Adebayo Ogunlesi',
+    whatsappNumber: '0803 123 4567',
+    state: '',
+    city: 'Ikeja',
+    accountRole: 'both',
+  });
+  assert.equal(unconfirmedState.valid, false);
+  assert.ok(unconfirmedState.errors.state);
 
   const validOnboarding = validateOnboardingInput({
     displayName: 'Adebayo Ogunlesi',
@@ -81,12 +130,12 @@ test('validateOnboardingInput enforces compulsory WhatsApp number, location, dis
   assert.equal(validOnboarding.normalizedWhatsapp, '+2348031234567');
 });
 
-test('isProfileOnboardingComplete rejects default Google-created rows without whatsapp_number or onboarding_completed', () => {
+test('isProfileOnboardingComplete rejects default Google-created rows without whatsapp_number, valid state, or onboarding_completed', () => {
   assert.equal(
     isProfileOnboardingComplete({
       display_name: 'Google User',
-      state: 'Lagos',
-      city: 'Lagos',
+      state: '',
+      city: '',
       account_role: 'both',
       whatsapp_number: null,
       onboarding_completed: false,
@@ -118,6 +167,85 @@ test('isProfileOnboardingComplete rejects default Google-created rows without wh
     }),
     true
   );
+});
+
+test('buildOnboardingProfileUpdate excludes protected columns and preserves contact visibility settings', () => {
+  const payload = buildOnboardingProfileUpdate({
+    displayName: 'Chidinma Okafor',
+    normalizedWhatsapp: '+2348031234567',
+    normalizedCalling: '+2348091234567',
+    state: 'Abuja (FCT)',
+    city: 'Wuse 2',
+    accountRole: 'seller',
+    existingAvatarUrl: 'https://example.com/existing-avatar.png',
+    googleAvatarUrl: 'https://example.com/google-avatar.png',
+    nowIso: '2026-11-12T10:00:00Z',
+  });
+
+  // Must NEVER include protected columns or overwrite contact visibility flags
+  assert.equal('id' in payload, false);
+  assert.equal('email' in payload, false);
+  assert.equal('is_admin' in payload, false);
+  assert.equal('verification_status' in payload, false);
+  assert.equal('created_at' in payload, false);
+  assert.equal('show_whatsapp_publicly' in payload, false);
+  assert.equal('show_calling_publicly' in payload, false);
+
+  // Must include only permitted onboarding columns
+  assert.equal(payload.display_name, 'Chidinma Okafor');
+  assert.equal(payload.whatsapp_number, '+2348031234567');
+  assert.equal(payload.calling_number, '+2348091234567');
+  assert.equal(payload.state, 'Abuja (FCT)');
+  assert.equal(payload.city, 'Wuse 2');
+  assert.equal(payload.account_role, 'seller');
+  assert.equal(payload.avatar_url, 'https://example.com/existing-avatar.png');
+  assert.equal(payload.onboarding_completed, true);
+  assert.equal(payload.onboarding_completed_at, '2026-11-12T10:00:00Z');
+});
+
+test('buildInitialMissingProfileInsert creates a safe unconfirmed profile without Lagos placeholder', () => {
+  const row = buildInitialMissingProfileInsert({
+    userId: 'user-123',
+    email: 'adebayo@example.com',
+    userMetadata: { full_name: 'Adebayo Ogunlesi' },
+  });
+
+  assert.equal(row.id, 'user-123');
+  assert.equal(row.display_name, 'Adebayo Ogunlesi');
+  assert.equal(row.email, 'adebayo@example.com');
+  assert.equal(row.state, '');
+  assert.equal(row.city, '');
+  assert.equal(row.onboarding_completed, false);
+  assert.equal(row.show_whatsapp_publicly, false);
+  assert.equal(row.show_calling_publicly, false);
+  assert.equal('is_admin' in row, false);
+  assert.equal('verification_status' in row, false);
+});
+
+test('classifyProfileFetchOutcome distinguishes missing profiles from permission, auth, and connection errors', () => {
+  const missingOutcome = classifyProfileFetchOutcome({
+    data: null,
+    error: null,
+  });
+  assert.equal(missingOutcome.status, 'missing');
+
+  const permissionOutcome = classifyProfileFetchOutcome({
+    data: null,
+    error: { code: '42501', message: 'permission denied for table profiles' },
+  });
+  assert.equal(permissionOutcome.status, 'permission_denied');
+
+  const authOutcome = classifyProfileFetchOutcome({
+    data: null,
+    error: { code: 'PGRST301', message: 'JWT expired' },
+  });
+  assert.equal(authOutcome.status, 'auth_expired');
+
+  const networkOutcome = classifyProfileFetchOutcome({
+    data: null,
+    error: { message: 'TypeError: fetch failed' },
+  });
+  assert.equal(networkOutcome.status, 'connection_error');
 });
 
 test('sanitizeRedirectPath blocks external URLs, protocol-relative URLs, and javascript: schemes', () => {

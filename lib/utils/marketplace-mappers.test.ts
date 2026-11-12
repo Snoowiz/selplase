@@ -4,6 +4,7 @@ import {
   buildListingStoragePath,
   mapDbBuyerRequestToBuyerRequest,
   mapDbListingToListing,
+  validateListingUpdate,
   validateOfferSubmission,
   validateOfferUpdate,
   validateStorageObjectOwnership,
@@ -143,7 +144,7 @@ test('validateOfferSubmission blocks incomplete profiles, self-offers, and inval
   assert.equal(validOffer.status, 200);
 });
 
-test('validateOfferUpdate prevents participants from manipulating protected offer fields', () => {
+test('validateOfferUpdate prevents participants from manipulating protected offer fields and locks terminal decisions', () => {
   const existingOffer = {
     id: 'offer-1',
     request_id: 'req-1',
@@ -182,7 +183,7 @@ test('validateOfferUpdate prevents participants from manipulating protected offe
   assert.equal(ownershipTamper.valid, false);
   assert.equal(ownershipTamper.status, 403);
 
-  // Buyer can accept the offer
+  // Buyer can accept the pending offer
   const validBuyerAccept = validateOfferUpdate({
     authenticatedUserId: buyerId,
     existingOffer,
@@ -191,4 +192,62 @@ test('validateOfferUpdate prevents participants from manipulating protected offe
   });
   assert.equal(validBuyerAccept.valid, true);
   assert.equal(validBuyerAccept.sanitizedUpdates?.status, 'accepted');
+
+  // Stage 4.1 Task 4: Buyer CANNOT subsequently reverse an accepted or declined offer
+  const buyerReverseAttempt = validateOfferUpdate({
+    authenticatedUserId: buyerId,
+    existingOffer: {
+      ...existingOffer,
+      status: 'accepted',
+    },
+    buyerRequestOwnerId: buyerId,
+    updates: { status: 'declined' },
+  });
+  assert.equal(buyerReverseAttempt.valid, false);
+  assert.equal(buyerReverseAttempt.status, 403);
+});
+
+test('validateListingUpdate blocks sellers from setting featured status or changing views_count', () => {
+  const existingListing = {
+    id: 'listing-1',
+    sellerId: 'seller-111',
+    featured: false,
+    viewsCount: 12,
+  };
+
+  // Non-owner cannot edit listing
+  const crossSellerAttempt = validateListingUpdate({
+    authenticatedUserId: 'seller-222',
+    existingListing,
+    updates: { price_naira: 150000 },
+  });
+  assert.equal(crossSellerAttempt.allowed, false);
+  assert.equal(crossSellerAttempt.status, 403);
+
+  // Seller cannot self-promote listing to featured
+  const selfFeatureAttempt = validateListingUpdate({
+    authenticatedUserId: 'seller-111',
+    existingListing,
+    updates: { featured: true },
+  });
+  assert.equal(selfFeatureAttempt.allowed, false);
+  assert.equal(selfFeatureAttempt.status, 403);
+
+  // Seller cannot inflate views_count
+  const viewsTamperAttempt = validateListingUpdate({
+    authenticatedUserId: 'seller-111',
+    existingListing,
+    updates: { views_count: 9999 },
+  });
+  assert.equal(viewsTamperAttempt.allowed, false);
+  assert.equal(viewsTamperAttempt.status, 403);
+
+  // Seller can update legitimate listing fields
+  const validSellerUpdate = validateListingUpdate({
+    authenticatedUserId: 'seller-111',
+    existingListing,
+    updates: { price_naira: 185000, status: 'sold' },
+  });
+  assert.equal(validSellerUpdate.allowed, true);
+  assert.equal(validSellerUpdate.status, 200);
 });

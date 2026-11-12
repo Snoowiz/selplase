@@ -364,15 +364,17 @@ export function validateOfferUpdate(params: {
     };
   }
 
+  // Terminal status lock: once an offer has been accepted or declined, neither
+  // the buyer nor the seller can reverse or modify the decision.
+  if (existingOffer.status !== 'pending') {
+    return {
+      valid: false,
+      status: 403,
+      error: `Forbidden: Offer has already been ${existingOffer.status} and cannot be modified or reversed.`,
+    };
+  }
+
   if (isSeller) {
-    if (existingOffer.status !== 'pending') {
-      return {
-        valid: false,
-        status: 403,
-        error:
-          'Forbidden: Sellers cannot modify an offer after the buyer has responded.',
-      };
-    }
     if ('status' in updates && updates.status !== existingOffer.status) {
       return {
         valid: false,
@@ -435,7 +437,7 @@ export function validateOfferUpdate(params: {
     return {
       valid: false,
       status: 400,
-      error: 'Buyers may only transition offer status to "accepted" or "declined".',
+      error: 'Buyers may only transition a pending offer to "accepted" or "declined".',
     };
   }
 
@@ -443,5 +445,156 @@ export function validateOfferUpdate(params: {
     valid: true,
     status: 200,
     sanitizedUpdates: { status: nextStatus },
+  };
+}
+
+/**
+ * Validates and sanitises listing updates so ordinary sellers cannot modify
+ * privileged or system-maintained columns (`featured`, `views_count`, `seller_id`,
+ * `slug`, `id`, `created_at`).
+ */
+export function validateListingUpdate(params: {
+  authenticatedUserId: string;
+  listingSellerId?: string;
+  existingListing?: {
+    id?: string;
+    sellerId: string;
+    featured?: boolean;
+    viewsCount?: number;
+  };
+  isAdmin?: boolean;
+  updates: Record<string, unknown>;
+}): {
+  valid: boolean;
+  allowed: boolean;
+  status: 200 | 400 | 403;
+  error?: string;
+  reason?: string;
+  sanitizedUpdates?: Record<string, unknown>;
+} {
+  const {
+    authenticatedUserId,
+    listingSellerId,
+    existingListing,
+    isAdmin = false,
+    updates,
+  } = params;
+  const resolvedSellerId = listingSellerId || existingListing?.sellerId || '';
+
+  if (!authenticatedUserId) {
+    const msg = 'Authentication required to update a listing.';
+    return {
+      valid: false,
+      allowed: false,
+      status: 403,
+      error: msg,
+      reason: msg,
+    };
+  }
+
+  if (!isAdmin && authenticatedUserId !== resolvedSellerId) {
+    const msg = 'Forbidden: You can only edit your own listings.';
+    return {
+      valid: false,
+      allowed: false,
+      status: 403,
+      error: msg,
+      reason: msg,
+    };
+  }
+
+  const immutableFields = ['id', 'seller_id', 'slug', 'created_at'];
+  for (const field of immutableFields) {
+    if (field in updates) {
+      const msg = `Forbidden: Listing field "${field}" is immutable.`;
+      return {
+        valid: false,
+        allowed: false,
+        status: 403,
+        error: msg,
+        reason: msg,
+      };
+    }
+  }
+
+  if (!isAdmin) {
+    if ('featured' in updates) {
+      const msg =
+        'Forbidden: Sellers cannot assign featured status to their listings.';
+      return {
+        valid: false,
+        allowed: false,
+        status: 403,
+        error: msg,
+        reason: msg,
+      };
+    }
+    if ('views_count' in updates || 'viewsCount' in updates) {
+      const msg =
+        'Forbidden: Sellers cannot modify system-maintained view counters.';
+      return {
+        valid: false,
+        allowed: false,
+        status: 403,
+        error: msg,
+        reason: msg,
+      };
+    }
+  }
+
+  const sanitized: Record<string, unknown> = {};
+  if (typeof updates.title === 'string') {
+    const t = updates.title.trim();
+    if (t.length < 5 || t.length > 140) {
+      const msg = 'Listing title must be between 5 and 140 characters.';
+      return {
+        valid: false,
+        allowed: false,
+        status: 400,
+        error: msg,
+        reason: msg,
+      };
+    }
+    sanitized.title = t;
+  }
+
+  if ('price_naira' in updates) {
+    const p = Math.round(Number(updates.price_naira));
+    if (!Number.isFinite(p) || p < 500) {
+      const msg = 'Listing price must be at least ₦500.';
+      return {
+        valid: false,
+        allowed: false,
+        status: 400,
+        error: msg,
+        reason: msg,
+      };
+    }
+    sanitized.price_naira = p;
+  }
+
+  if (typeof updates.status === 'string') {
+    if (!['active', 'sold', 'archived'].includes(updates.status)) {
+      const msg = 'Invalid listing status.';
+      return {
+        valid: false,
+        allowed: false,
+        status: 400,
+        error: msg,
+        reason: msg,
+      };
+    }
+    sanitized.status = updates.status;
+  }
+
+  if (isAdmin && typeof updates.featured === 'boolean') {
+    sanitized.featured = updates.featured;
+  }
+
+  return {
+    valid: true,
+    allowed: true,
+    status: 200,
+    sanitizedUpdates: sanitized,
   };
 }

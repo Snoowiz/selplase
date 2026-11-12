@@ -38,6 +38,7 @@ import {
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import type { AccountRole } from '@/lib/types/profile';
 import { ListingCard } from '@/components/marketplace/ListingCard';
+import { CompleteProfileModal } from '@/components/marketplace/CompleteProfileModal';
 
 type AccountScreenTab =
   | 'dashboard'
@@ -81,6 +82,8 @@ function AccountInterfaceInner({
   const [selectedSellerId, setSelectedSellerId] = useState<string>(
     initialSellerId || DEMO_SELLERS.adebayoTech.id
   );
+  const [isCompleteProfileModalDismissed, setIsCompleteProfileModalDismissed] =
+    useState<boolean>(false);
 
   // Auth Status & Error/Success Messages
   const [authSubmitting, setAuthSubmitting] = useState(false);
@@ -88,7 +91,8 @@ function AccountInterfaceInner({
   const [authError, setAuthError] = useState<string | null>(
     errorFlag === 'confirmation_failed'
       ? 'Email confirmation or recovery link expired or was invalid. Please request a new link.'
-      : errorFlag === 'oauth_callback_failed' ||
+      : errorFlag === 'oauth_failed' ||
+          errorFlag === 'oauth_callback_failed' ||
           errorFlag === 'missing_oauth_code'
         ? 'Google sign-in could not be completed or was cancelled. Please try again.'
         : errorFlag === 'supabase_unconfigured'
@@ -639,6 +643,20 @@ function AccountInterfaceInner({
         </div>
       </div>
 
+      {/* Reusable 'Complete Your Profile' Modal on top of Account Dashboard when isOnboardingComplete is false */}
+      <CompleteProfileModal
+        isOpen={
+          activeTab === 'dashboard' &&
+          !authLoading &&
+          !isOnboardingComplete &&
+          !isCompleteProfileModalDismissed
+        }
+        onClose={() => setIsCompleteProfileModalDismissed(true)}
+        userProfile={userProfile}
+        isAuthenticated={Boolean(authUser)}
+        nextPath="/account?tab=dashboard"
+      />
+
       {/* =================================================================== */}
       {/* TAB 1: ACCOUNT DASHBOARD & PROTECTED USER PROFILE                   */}
       {/* =================================================================== */}
@@ -712,12 +730,23 @@ function AccountInterfaceInner({
                         requests, or seller offers.
                       </p>
                     </div>
-                    <Link
-                      href="/onboarding?next=/account?tab=dashboard"
-                      className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold whitespace-nowrap shrink-0"
-                    >
-                      Complete Onboarding →
-                    </Link>
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setIsCompleteProfileModalDismissed(false)
+                        }
+                        className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-amber-100/70 border border-amber-300 text-amber-950 font-semibold whitespace-nowrap cursor-pointer"
+                      >
+                        View Setup Checklist
+                      </button>
+                      <Link
+                        href="/onboarding?next=/account?tab=dashboard"
+                        className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold whitespace-nowrap shrink-0"
+                      >
+                        Complete Onboarding →
+                      </Link>
+                    </div>
                   </div>
                 )}
 
@@ -1008,12 +1037,13 @@ function AccountInterfaceInner({
                   >
                     Email Sign In
                   </button>
-                  <Link
-                    href="/onboarding"
-                    className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition-colors"
+                  <button
+                    type="button"
+                    onClick={() => setIsCompleteProfileModalDismissed(false)}
+                    className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition-colors cursor-pointer"
                   >
-                    Preview Onboarding
-                  </Link>
+                    Complete Your Profile
+                  </button>
                 </div>
               </div>
             )}
@@ -1189,6 +1219,12 @@ function AccountInterfaceInner({
                   • <strong>Stage 4 Migration (Onboarding &amp; Security Hardening):</strong>{' '}
                   <code className="font-mono text-[11px]">
                     supabase/migrations/20261112000003_stage4_onboarding_and_security_hardening.sql
+                  </code>
+                </li>
+                <li>
+                  • <strong>Stage 4.1 Migration (Stabilisation &amp; Invariant Locks):</strong>{' '}
+                  <code className="font-mono text-[11px]">
+                    supabase/migrations/20261112000004_stage4_1_stabilisation_and_security.sql
                   </code>
                 </li>
                 <li>

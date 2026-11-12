@@ -1,6 +1,8 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import {
+  buildInitialMissingProfileInsert,
+  classifyProfileFetchOutcome,
   isProfileOnboardingComplete,
   sanitizeRedirectPath,
 } from '@/lib/utils/profile-utils';
@@ -12,6 +14,10 @@ import type { UserProfileRow } from '@/lib/types/profile';
  * - Exchanges authorization `code` for a persistent session cookie.
  * - Sanitises `next` destination to prevent open-redirect vulnerabilities.
  * - Checks whether the user's Selplase profile has completed onboarding:
+ *   - Uses `classifyProfileFetchOutcome()` so transient DB/permission errors do not
+ *     overwrite an existing profile with incomplete defaults.
+ *   - Only executes `.insert()` (never `.upsert()`) when the profile row is
+ *     genuinely missing (`!selectError && !existingProfile`).
  *   - Incomplete profiles are redirected to `/onboarding?next=<safeNext>`.
  *   - Completed profiles bypass onboarding and go directly to `<safeNext>`.
  */
@@ -53,52 +59,43 @@ export async function GET(request: NextRequest) {
 
   const user = data.user;
 
-  const { data: existingProfile } = await supabase
+  const { data: existingProfile, error: selectError } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', user.id)
     .maybeSingle();
 
-  let profile = existingProfile as UserProfileRow | null;
+  const fetchOutcome = classifyProfileFetchOutcome({
+    data: existingProfile as UserProfileRow | null,
+    error: selectError,
+  });
 
-  if (!profile) {
-    const meta = user.user_metadata || {};
-    const googleName =
-      (typeof meta.full_name === 'string' && meta.full_name.trim()) ||
-      (typeof meta.name === 'string' && meta.name.trim()) ||
-      (typeof meta.display_name === 'string' && meta.display_name.trim()) ||
-      (user.email || 'Selplase Member').split('@')[0];
+  let profile: UserProfileRow | null =
+    fetchOutcome.status === 'found' ? (fetchOutcome.profile ?? null) : null;
 
-    const googleAvatar =
-      (typeof meta.avatar_url === 'string' && meta.avatar_url.trim()) ||
-      (typeof meta.picture === 'string' && meta.picture.trim()) ||
-      null;
+  if (fetchOutcome.status === 'missing') {
+    const initialRow = buildInitialMissingProfileInsert({
+      userId: user.id,
+      email: user.email,
+      userMetadata: (user.user_metadata || {}) as Record<string, unknown>,
+    });
 
-    const { data: inserted } = await supabase
+    const { data: inserted, error: insertError } = await supabase
       .from('profiles')
-      .upsert(
-        {
-          id: user.id,
-          display_name:
-            googleName.length >= 2 ? googleName : 'Selplase Member',
-          email: user.email || '',
-          whatsapp_number: null,
-          calling_number: null,
-          state: 'Lagos',
-          city: 'Lagos',
-          account_role: 'both',
-          avatar_url: googleAvatar,
-          show_whatsapp_publicly: false,
-          show_calling_publicly: false,
-          onboarding_completed: false,
-          onboarding_completed_at: null,
-        },
-        { onConflict: 'id' }
-      )
+      .insert(initialRow)
       .select('*')
       .maybeSingle();
 
-    profile = (inserted as UserProfileRow | null) ?? null;
+    if (!insertError && inserted) {
+      profile = inserted as UserProfileRow;
+    } else if (insertError?.code === '23505') {
+      const { data: refetched } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+      profile = (refetched as UserProfileRow | null) ?? null;
+    }
   }
 
   if (!isProfileOnboardingComplete(profile)) {

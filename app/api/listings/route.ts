@@ -6,6 +6,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import {
   type DbMarketplaceListingRow,
   mapDbListingToListing,
+  validateListingUpdate,
 } from '@/lib/utils/marketplace-mappers';
 import type {
   CategorySlug,
@@ -210,6 +211,122 @@ export async function POST(req: NextRequest) {
       { data: mapped, stage: 'stage-4-selplase-listings', persisted: true },
       { status: 201 }
     );
+  } catch {
+    return NextResponse.json(
+      { error: 'Invalid JSON request payload' },
+      { status: 400 }
+    );
+  }
+}
+
+/**
+ * PATCH /api/listings
+ * Allows a seller to update editable fields of their own listing while blocking
+ * self-promotion (`featured`) or view counter manipulation (`views_count`).
+ */
+export async function PATCH(req: NextRequest) {
+  const supabase = await createSupabaseServerClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: 'Supabase is not configured.' },
+      { status: 503 }
+    );
+  }
+
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return NextResponse.json(
+      { error: 'Unauthorized: Sign in to update your listing.' },
+      { status: 401 }
+    );
+  }
+
+  try {
+    const body = await req.json();
+    const listingId = String(body.listingId || '').trim();
+    const updates = (body.updates || {}) as Record<string, unknown>;
+
+    if (!listingId) {
+      return NextResponse.json(
+        { error: 'listingId is required.' },
+        { status: 400 }
+      );
+    }
+
+    const { data: existingListing, error: fetchError } = await supabase
+      .from('listings')
+      .select('id, seller_id, featured, views_count')
+      .eq('id', listingId)
+      .maybeSingle();
+
+    if (fetchError || !existingListing) {
+      return NextResponse.json(
+        { error: 'Listing not found.' },
+        { status: 404 }
+      );
+    }
+
+    const check = validateListingUpdate({
+      authenticatedUserId: user.id,
+      existingListing: {
+        id: existingListing.id,
+        sellerId: existingListing.seller_id,
+        featured: Boolean(existingListing.featured),
+        viewsCount: Number(existingListing.views_count || 1),
+      },
+      updates,
+    });
+
+    if (!check.allowed) {
+      return NextResponse.json(
+        { error: check.reason },
+        { status: check.status }
+      );
+    }
+
+    const safeUpdate: Record<string, unknown> = {
+      updated_at: new Date().toISOString(),
+    };
+    if (typeof updates.title === 'string' && updates.title.trim().length >= 3) {
+      safeUpdate.title = updates.title.trim();
+    }
+    if (typeof updates.price_naira === 'number' && updates.price_naira > 0) {
+      safeUpdate.price_naira = Math.round(updates.price_naira);
+    }
+    if (typeof updates.price_note === 'string') {
+      safeUpdate.price_note = updates.price_note.trim();
+    }
+    if (typeof updates.description === 'string' && updates.description.trim().length >= 10) {
+      safeUpdate.description = updates.description.trim();
+    }
+    if (
+      updates.status === 'active' ||
+      updates.status === 'sold' ||
+      updates.status === 'archived'
+    ) {
+      safeUpdate.status = updates.status;
+    }
+
+    const { data: updated, error: updateError } = await supabase
+      .from('listings')
+      .update(safeUpdate)
+      .eq('id', listingId)
+      .eq('seller_id', user.id)
+      .select('*')
+      .single();
+
+    if (updateError || !updated) {
+      return NextResponse.json(
+        { error: updateError?.message || 'Failed to update listing.' },
+        { status: 400 }
+      );
+    }
+
+    return NextResponse.json({ data: updated }, { status: 200 });
   } catch {
     return NextResponse.json(
       { error: 'Invalid JSON request payload' },
