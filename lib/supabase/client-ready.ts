@@ -1,9 +1,13 @@
 /**
- * SELPLAS Data Access Layer — Stage 1 Mock Adapter & Stage 2 Supabase Blueprint
+ * SELPLAS Data Access Layer — Stage 3: Supabase Marketplace Database & Storage Migration
  *
- * This module decouples UI components from the underlying storage engine so the
- * exact same functions can be backed by Supabase PostgreSQL + Supabase Storage
- * in Stage 2 and shared with the React Native Expo mobile app.
+ * Active Supabase PostgreSQL tables:
+ * - `public.profiles` (Stage 2)
+ * - `public.listings` (Stage 3)
+ * - `public.buyer_requests` (Stage 3)
+ * - `public.request_offers` (Stage 3)
+ * Active Supabase Storage bucket:
+ * - `listing-images` (folder-isolated per authenticated user ID)
  */
 
 import type {
@@ -22,13 +26,73 @@ import {
   INITIAL_LISTINGS,
 } from '../data/mock-marketplace';
 import { filterBuyerRequests, filterListings } from '../utils/formatters';
+import { buildListingStoragePath } from '../utils/marketplace-mappers';
+import { createSupabaseBrowserClient } from './client';
+import { getSupabasePublicEnv } from './config';
 
-export const SUPABASE_STAGE2_CONFIG = {
-  isConnected: false,
-  stageLabel: 'Stage 1 — Local Typed Mock Data (Supabase Ready)',
-  plannedTables: ['profiles', 'listings', 'buyer_requests', 'request_offers'],
-  plannedBuckets: ['listing-images', 'profile-avatars'],
-};
+export function getStage3Status() {
+  const env = getSupabasePublicEnv();
+  return {
+    isSupabaseConfigured: env.isConfigured,
+    keySource: env.keySource,
+    activeTables: [
+      'public.profiles',
+      'public.listings',
+      'public.buyer_requests',
+      'public.request_offers',
+    ],
+    storageBucket: 'listing-images',
+    migrations: [
+      'supabase/migrations/20261112000001_user_profiles_and_rls.sql',
+      'supabase/migrations/20261112000002_marketplace_listings_requests_offers.sql',
+    ],
+  };
+}
+
+export const getStage2Status = getStage3Status;
+
+/**
+ * Uploads a single listing photo file to the `listing-images` Supabase Storage bucket
+ * under `${userId}/${timestamp}-${safeName}` (enforced by storage.objects RLS).
+ */
+export async function uploadListingImageToSupabase(params: {
+  userId: string;
+  file: File;
+}): Promise<{ publicUrl: string | null; error: string | null }> {
+  const supabase = createSupabaseBrowserClient();
+  if (!supabase) {
+    return {
+      publicUrl: null,
+      error: 'Supabase client is not configured.',
+    };
+  }
+
+  const objectPath = buildListingStoragePath(params.userId, params.file.name);
+
+  const { error: uploadError } = await supabase.storage
+    .from('listing-images')
+    .upload(objectPath, params.file, {
+      cacheControl: '3600',
+      upsert: false,
+      contentType: params.file.type || 'image/jpeg',
+    });
+
+  if (uploadError) {
+    return {
+      publicUrl: null,
+      error: uploadError.message,
+    };
+  }
+
+  const { data } = supabase.storage
+    .from('listing-images')
+    .getPublicUrl(objectPath);
+
+  return {
+    publicUrl: data.publicUrl,
+    error: null,
+  };
+}
 
 export async function getMarketplaceListings(
   filters: ListingFilterParams = {},
@@ -41,7 +105,9 @@ export async function getMarketplaceListingById(
   id: string,
   sourceListings: Listing[] = INITIAL_LISTINGS
 ): Promise<Listing | null> {
-  return sourceListings.find((item) => item.id === id || item.slug === id) || null;
+  return (
+    sourceListings.find((item) => item.id === id || item.slug === id) || null
+  );
 }
 
 export async function getMarketplaceBuyerRequests(
@@ -79,7 +145,7 @@ export function buildNewListingEntity(input: CreateListingInput): Listing {
         : [
             `${input.condition} · Ready for inspection`,
             `Location: ${input.city.trim()}, ${input.state}`,
-            'Direct WhatsApp connection with seller',
+            'Browser-local fallback listing',
           ],
     images: input.images,
     visualTheme: {
@@ -103,7 +169,7 @@ export function buildNewListingEntity(input: CreateListingInput): Listing {
     seller: {
       ...DEMO_SELLERS.adebayoTech,
       fullName: input.sellerName
-        ? `${input.sellerName.trim()} (Demo)`
+        ? `${input.sellerName.trim()} (Local Preview)`
         : DEMO_SELLERS.adebayoTech.fullName,
       whatsappPhone:
         input.sellerWhatsapp || DEMO_SELLERS.adebayoTech.whatsappPhone,
@@ -142,7 +208,7 @@ export function buildNewBuyerRequestEntity(
     description: input.description.trim(),
     createdAt: new Date().toISOString(),
     offersCount: 0,
-    buyerName: `${input.buyerName.trim()} (Demo)`,
+    buyerName: `${input.buyerName.trim()} (Local Preview)`,
     buyerInitials: initials || 'BU',
     buyerWhatsapp: input.buyerWhatsapp.trim() || '08030000000',
     isDemoData: true,

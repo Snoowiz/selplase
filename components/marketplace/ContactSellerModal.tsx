@@ -281,7 +281,7 @@ export function ContactSellerModal() {
 
           {sentConfirmation && (
             <p className="text-xs font-semibold text-emerald-700">
-              Mock message delivered! See the simulated reply below.
+              Saved to local browser preview only (not sent to other users yet).
             </p>
           )}
 

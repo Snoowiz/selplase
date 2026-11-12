@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, CheckCircle2, Handshake } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Handshake, Loader2 } from 'lucide-react';
 import { useMarketplace } from '@/context/MarketplaceContext';
 import {
   CATEGORIES,
@@ -20,7 +20,7 @@ import type {
 
 export default function CreateRequestPage() {
   const router = useRouter();
-  const { addBuyerRequest } = useMarketplace();
+  const { userProfile, publishBuyerRequest } = useMarketplace();
 
   const [title, setTitle] = useState('');
   const [requestType, setRequestType] = useState<ListingType>('product');
@@ -29,19 +29,24 @@ export default function CreateRequestPage() {
   const [budgetMaxNaira, setBudgetMaxNaira] = useState('');
   const [preferredCondition, setPreferredCondition] =
     useState<ProductCondition>('Foreign Used (Tokunbo)');
-  const [state, setState] = useState('Lagos');
-  const [city, setCity] = useState('Ikeja');
+  const [state, setState] = useState(userProfile?.state || 'Lagos');
+  const [city, setCity] = useState(userProfile?.city || 'Ikeja');
   const [area, setArea] = useState('Ikeja GRA');
   const [urgency, setUrgency] =
     useState<BuyerRequest['urgency']>('This Week');
   const [description, setDescription] = useState('');
-  const [buyerName, setBuyerName] = useState('');
-  const [buyerWhatsapp, setBuyerWhatsapp] = useState('08030001122');
+  const [buyerName, setBuyerName] = useState(userProfile?.display_name || '');
+  const [buyerWhatsapp, setBuyerWhatsapp] = useState(
+    userProfile?.whatsapp_number || '08030001122'
+  );
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
   const [createdId, setCreatedId] = useState<string | null>(null);
+  const [persistedToDb, setPersistedToDb] = useState<boolean>(false);
+  const [publishFeedback, setPublishFeedback] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const minVal = budgetMinNaira
       ? Number(budgetMinNaira)
@@ -71,7 +76,8 @@ export default function CreateRequestPage() {
     }
 
     setErrors({});
-    const created = addBuyerRequest({
+    setSubmitting(true);
+    const result = await publishBuyerRequest({
       title,
       requestType,
       category,
@@ -87,8 +93,11 @@ export default function CreateRequestPage() {
       buyerName,
       buyerWhatsapp,
     });
+    setSubmitting(false);
 
-    setCreatedId(created.id);
+    setPersistedToDb(result.persistedToSupabase);
+    setPublishFeedback(result.error || null);
+    setCreatedId(result.request.id);
   };
 
   if (createdId) {
@@ -100,14 +109,33 @@ export default function CreateRequestPage() {
           </div>
           <div>
             <p className="text-xs font-semibold text-blue-600">
-              Buyer Request Published
+              {persistedToDb
+                ? 'Published to Supabase PostgreSQL (public.buyer_requests)'
+                : 'Saved to Local Session Preview'}
             </p>
             <h1 className="text-2xl font-extrabold text-slate-950 font-display mt-1">
-              Sellers Can Now Respond to Your Request!
+              {persistedToDb
+                ? 'Buyer Request Live on SELPLAS'
+                : 'Saved to Local Buyer Requests Board'}
             </h1>
             <p className="text-sm text-slate-600 mt-2">
-              Your request &ldquo;{title}&rdquo; is now live on the SELPLAS
-              Buyer Requests board.
+              {persistedToDb ? (
+                <>
+                  Your request &ldquo;{title}&rdquo; is now persisted in{' '}
+                  <code className="font-mono">public.buyer_requests</code> so
+                  verified and registered sellers can respond.
+                </>
+              ) : (
+                <>
+                  Your request &ldquo;{title}&rdquo; is saved in your current
+                  session preview.
+                  {publishFeedback && (
+                    <span className="block text-xs text-amber-700 mt-1.5">
+                      Note: {publishFeedback}
+                    </span>
+                  )}
+                </>
+              )}
             </p>
           </div>
           <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
@@ -455,9 +483,11 @@ export default function CreateRequestPage() {
           </Link>
           <button
             type="submit"
-            className="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold shadow-sm transition-colors cursor-pointer"
+            disabled={submitting}
+            className="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs sm:text-sm font-semibold shadow-sm flex items-center gap-2 transition-colors cursor-pointer"
           >
-            Publish Buyer Request
+            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+            {submitting ? 'Publishing...' : 'Publish Buyer Request'}
           </button>
         </div>
       </form>

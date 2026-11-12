@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   Eye,
   ImagePlus,
+  Loader2,
   MapPin,
   Sparkles,
   Store,
@@ -20,6 +21,7 @@ import {
   PRODUCT_CONDITIONS,
 } from '@/lib/data/mock-marketplace';
 import { formatNaira, validateCreateListing } from '@/lib/utils/formatters';
+import { uploadListingImageToSupabase } from '@/lib/supabase/client-ready';
 import type {
   CategorySlug,
   ListingType,
@@ -29,44 +31,80 @@ import { ProductVisual } from '@/components/marketplace/ProductVisual';
 
 export default function CreateListingPage() {
   const router = useRouter();
-  const { addListing } = useMarketplace();
+  const { authUser, userProfile, publishListing } = useMarketplace();
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [type, setType] = useState<ListingType>('product');
   const [category, setCategory] = useState<CategorySlug>('phones-tablets');
   const [images, setImages] = useState<string[]>([]);
+  const [uploadingImages, setUploadingImages] = useState(false);
+  const [uploadStatusNote, setUploadStatusNote] = useState<string | null>(null);
 
   const [title, setTitle] = useState('');
   const [priceNaira, setPriceNaira] = useState('');
   const [priceNote, setPriceNote] = useState('Slightly Negotiable');
   const [condition, setCondition] =
     useState<ProductCondition>('Foreign Used (Tokunbo)');
-  const [state, setState] = useState('Lagos');
-  const [city, setCity] = useState('Lekki Phase 1');
+  const [state, setState] = useState(userProfile?.state || 'Lagos');
+  const [city, setCity] = useState(userProfile?.city || 'Lekki Phase 1');
   const [area, setArea] = useState('Admiralty Way');
   const [description, setDescription] = useState('');
-  const [highlightText, setHighlightText] = useState('');
-  const [sellerName, setSellerName] = useState('Adebayo Ogunlesi');
-  const [sellerWhatsapp, setSellerWhatsapp] = useState('08030001122');
+  const [highlightText] = useState('');
+  const [sellerName, setSellerName] = useState(
+    userProfile?.display_name || 'Adebayo Ogunlesi'
+  );
+  const [sellerWhatsapp, setSellerWhatsapp] = useState(
+    userProfile?.whatsapp_number || '08030001122'
+  );
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
   const [publishedId, setPublishedId] = useState<string | null>(null);
+  const [persistedToDb, setPersistedToDb] = useState<boolean>(false);
+  const [publishFeedback, setPublishFeedback] = useState<string | null>(null);
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    Array.from(files)
-      .slice(0, 4 - images.length)
-      .forEach((file) => {
+    const selected = Array.from(files).slice(0, 4 - images.length);
+    setUploadingImages(true);
+    setUploadStatusNote(null);
+
+    for (const file of selected) {
+      if (authUser) {
+        const uploaded = await uploadListingImageToSupabase({
+          userId: authUser.id,
+          file,
+        });
+        if (uploaded.publicUrl) {
+          setImages((prev) => [...prev, uploaded.publicUrl!].slice(0, 4));
+          setUploadStatusNote(
+            'Uploaded to Supabase Storage bucket `listing-images`.'
+          );
+          continue;
+        } else {
+          setUploadStatusNote(
+            `Storage bucket upload note: ${uploaded.error}. Using local preview image.`
+          );
+        }
+      }
+
+      // Fallback data URL preview when signed out or before bucket migration is applied
+      await new Promise<void>((resolve) => {
         const reader = new FileReader();
         reader.onload = () => {
           if (typeof reader.result === 'string') {
             setImages((prev) => [...prev, reader.result as string].slice(0, 4));
           }
+          resolve();
         };
+        reader.onerror = () => resolve();
         reader.readAsDataURL(file);
       });
+    }
+
+    setUploadingImages(false);
   };
 
   const handleRemoveImage = (index: number) => {
@@ -104,7 +142,7 @@ export default function CreateListingPage() {
     setStep(3);
   };
 
-  const handlePublish = (e: React.FormEvent) => {
+  const handlePublish = async (e: React.FormEvent) => {
     e.preventDefault();
     const validation = validateCreateListing({
       title,
@@ -130,7 +168,8 @@ export default function CreateListingPage() {
       .map((line) => line.trim())
       .filter(Boolean);
 
-    const created = addListing({
+    setSubmitting(true);
+    const result = await publishListing({
       title,
       type,
       category,
@@ -143,11 +182,14 @@ export default function CreateListingPage() {
       description,
       highlights: parsedHighlights,
       images,
-      sellerName,
-      sellerWhatsapp,
+      sellerName: userProfile?.display_name || sellerName,
+      sellerWhatsapp: userProfile?.whatsapp_number || sellerWhatsapp,
     });
+    setSubmitting(false);
 
-    setPublishedId(created.id);
+    setPersistedToDb(result.persistedToSupabase);
+    setPublishFeedback(result.error || null);
+    setPublishedId(result.listing.id);
   };
 
   const categoryObj = CATEGORIES.find((c) => c.id === category);
@@ -161,15 +203,33 @@ export default function CreateListingPage() {
           </div>
           <div>
             <p className="text-xs font-semibold text-emerald-700">
-              Stage 1 Marketplace Preview
+              {persistedToDb
+                ? 'Published to Supabase PostgreSQL (public.listings)'
+                : 'Saved to Local Session Preview'}
             </p>
             <h1 className="text-2xl font-extrabold text-slate-950 font-display mt-1">
-              Your Listing is Now Live!
+              {persistedToDb
+                ? 'Listing Live on SELPLAS Marketplace'
+                : 'Saved to Local Marketplace Preview'}
             </h1>
             <p className="text-sm text-slate-600 mt-2 max-w-md mx-auto">
-              &ldquo;{title}&rdquo; ({formatNaira(Number(priceNaira))}) has been
-              published to the SELPLAS marketplace and is ready for WhatsApp
-              sharing.
+              {persistedToDb ? (
+                <>
+                  &ldquo;{title}&rdquo; ({formatNaira(Number(priceNaira))}) is
+                  now persisted in <code className="font-mono">public.listings</code>{' '}
+                  linked to your authenticated seller profile.
+                </>
+              ) : (
+                <>
+                  &ldquo;{title}&rdquo; ({formatNaira(Number(priceNaira))}) is
+                  available in your current session preview.{' '}
+                  {publishFeedback && (
+                    <span className="block text-xs text-amber-700 mt-1.5">
+                      Note: {publishFeedback}
+                    </span>
+                  )}
+                </>
+              )}
             </p>
           </div>
           <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
@@ -383,8 +443,10 @@ export default function CreateListingPage() {
                 )}
               </div>
               <p className="text-xs text-slate-500 mt-2">
-                Stage 2 Note: Uploaded photos will be stored directly in
-                Supabase Storage bucket <code className="font-mono">listing-images</code>.
+                {uploadingImages
+                  ? 'Uploading photo to Supabase Storage bucket `listing-images`...'
+                  : uploadStatusNote ||
+                    'Authenticated uploads are stored in Supabase Storage bucket `listing-images` under your user ID folder.'}
               </p>
             </div>
 
@@ -716,9 +778,11 @@ export default function CreateListingPage() {
 
               <button
                 type="submit"
-                className="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold shadow-[0_8px_24px_rgba(37,99,235,0.25)] transition-all cursor-pointer"
+                disabled={submitting}
+                className="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-semibold shadow-[0_8px_24px_rgba(37,99,235,0.25)] flex items-center gap-2 transition-all cursor-pointer"
               >
-                Publish Listing Now
+                {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                {submitting ? 'Publishing...' : 'Publish Listing Now'}
               </button>
             </div>
           </form>

@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ExternalLink,
   HandHeart,
+  Loader2,
   MessageCircle,
   ShieldCheck,
   X,
@@ -20,13 +21,18 @@ import type { ProductCondition } from '@/lib/types/marketplace';
 
 export function HaveThisModal() {
   const {
+    userProfile,
     activeHaveThisRequest,
     closeHaveThisModal,
-    submitOfferForRequest,
+    publishOfferForRequest,
   } = useMarketplace();
 
-  const [sellerName, setSellerName] = useState('Adebayo Ogunlesi');
-  const [sellerWhatsapp, setSellerWhatsapp] = useState('08030001122');
+  const [sellerName, setSellerName] = useState(
+    userProfile?.display_name || 'Adebayo Ogunlesi'
+  );
+  const [sellerWhatsapp, setSellerWhatsapp] = useState(
+    userProfile?.whatsapp_number || '08030001122'
+  );
   const [offeredPrice, setOfferedPrice] = useState('');
   const [condition, setCondition] =
     useState<ProductCondition>('Foreign Used (Tokunbo)');
@@ -35,9 +41,12 @@ export function HaveThisModal() {
     'I have this exact item available for immediate physical inspection.'
   );
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [submittedOfferPrice, setSubmittedOfferPrice] = useState<number | null>(
     null
   );
+  const [persistedToDb, setPersistedToDb] = useState<boolean>(false);
+  const [offerFeedback, setOfferFeedback] = useState<string | null>(null);
 
   if (!activeHaveThisRequest) return null;
 
@@ -50,7 +59,7 @@ export function HaveThisModal() {
     typeof window !== 'undefined' ? window.location.origin : 'https://selplas.ng';
   const requestUrl = `${origin}/requests#${activeHaveThisRequest.id}`;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const numericPrice = Number(
       offeredPrice || activeHaveThisRequest.budgetMaxNaira
@@ -64,7 +73,8 @@ export function HaveThisModal() {
       return;
     }
     setError('');
-    submitOfferForRequest({
+    setSubmitting(true);
+    const result = await publishOfferForRequest({
       request: activeHaveThisRequest,
       sellerName,
       sellerWhatsapp,
@@ -73,11 +83,16 @@ export function HaveThisModal() {
       location,
       note,
     });
+    setSubmitting(false);
+    setPersistedToDb(result.persistedToSupabase);
+    setOfferFeedback(result.error || null);
     setSubmittedOfferPrice(numericPrice);
   };
 
   const handleClose = () => {
     setSubmittedOfferPrice(null);
+    setPersistedToDb(false);
+    setOfferFeedback(null);
     setError('');
     closeHaveThisModal();
   };
@@ -149,12 +164,27 @@ export function HaveThisModal() {
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900">
-                Offer Recorded ({formatNaira(submittedOfferPrice)})
+                {persistedToDb
+                  ? `Offer Recorded in Supabase (${formatNaira(submittedOfferPrice)})`
+                  : `Offer Saved in Local Preview (${formatNaira(submittedOfferPrice)})`}
               </h3>
               <p className="text-xs text-slate-600 mt-1 max-w-sm mx-auto">
-                Your response has been logged on this buyer request and added to
-                your Seller Dashboard. You can now message the buyer directly on
-                WhatsApp.
+                {persistedToDb ? (
+                  <>
+                    Your response has been persisted in{' '}
+                    <code className="font-mono">public.request_offers</code>. You
+                    can also connect with the buyer directly on WhatsApp below.
+                  </>
+                ) : (
+                  <>
+                    Your response has been saved in your current session preview.{' '}
+                    {offerFeedback && (
+                      <span className="block text-amber-700 mt-1">
+                        {offerFeedback}
+                      </span>
+                    )}
+                  </>
+                )}
               </p>
             </div>
             <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
@@ -308,9 +338,11 @@ export function HaveThisModal() {
               </button>
               <button
                 type="submit"
-                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-sm transition-colors cursor-pointer"
+                disabled={submitting}
+                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-semibold shadow-sm flex items-center gap-1.5 transition-colors cursor-pointer"
               >
-                Submit Response & Connect
+                {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {submitting ? 'Submitting...' : 'Submit Response & Connect'}
               </button>
             </div>
           </form>

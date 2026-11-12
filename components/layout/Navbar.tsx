@@ -3,20 +3,31 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useMarketplace } from '@/context/MarketplaceContext';
 import { ShareModal } from '@/components/marketplace/ShareModal';
 import { HaveThisModal } from '@/components/marketplace/HaveThisModal';
 import { ContactSellerModal } from '@/components/marketplace/ContactSellerModal';
 
-const NAV_LINKS = [
-  { href: '/explore', label: 'Explore' },
-  { href: '/explore?type=service', label: 'Services' },
-  { href: '/requests', label: 'Requests' },
-  { href: '/sell', label: 'Start Selling' },
-  { href: '/account', label: 'Account' },
-];
-
 export function Navbar() {
   const pathname = usePathname();
+  const { authUser, userProfile } = useMarketplace();
+
+  const accountLabel = authUser
+    ? userProfile?.display_name
+      ? `Account (${userProfile.display_name.split(' ')[0]})`
+      : 'Account (Signed In)'
+    : 'Sign In';
+
+  const navLinks = [
+    { href: '/explore', label: 'Explore' },
+    { href: '/explore?type=service', label: 'Services' },
+    { href: '/requests', label: 'Requests' },
+    { href: '/sell', label: 'Start Selling' },
+    {
+      href: authUser ? '/account?tab=dashboard' : '/account?tab=login',
+      label: accountLabel,
+    },
+  ];
 
   return (
     <>
@@ -35,16 +46,17 @@ export function Navbar() {
             aria-label="Primary Navigation"
             className="hidden md:flex items-center gap-7 text-sm font-medium text-slate-600"
           >
-            {NAV_LINKS.map((link) => {
+            {navLinks.map((link) => {
+              const baseHref = link.href.split('?')[0];
               const isActive =
                 pathname === link.href ||
-                (link.href !== '/' &&
-                  !link.href.includes('?') &&
-                  pathname.startsWith(link.href));
+                (baseHref !== '/' &&
+                  !link.href.includes('type=service') &&
+                  pathname.startsWith(baseHref));
 
               return (
                 <Link
-                  key={link.href}
+                  key={link.label}
                   href={link.href}
                   className={`py-1 transition-colors whitespace-nowrap shrink-0 border-b-2 ${
                     isActive

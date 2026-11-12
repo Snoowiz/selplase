@@ -1,40 +1,72 @@
 'use client';
 
-import React, { Suspense, useState } from 'react';
+import React, { Suspense, useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
+  AlertCircle,
+  CheckCircle2,
   Database,
+  Eye,
+  EyeOff,
   Heart,
   Info,
+  KeyRound,
   LayoutDashboard,
+  Loader2,
   Lock,
+  LogOut,
+  Mail,
   MapPin,
   MessageCircle,
   MessageSquare,
   Phone,
-  PlusCircle,
+  ShieldCheck,
   Store,
   UserCheck,
+  UserCog,
   UserPlus,
 } from 'lucide-react';
 import { useMarketplace } from '@/context/MarketplaceContext';
 import { DEMO_SELLERS, NIGERIAN_STATES } from '@/lib/data/mock-marketplace';
 import { buildTelCallUrl, formatNaira } from '@/lib/utils/formatters';
+import {
+  normalizeNigerianPhone,
+  toPublicSellerProfile,
+  validateRegistrationInput,
+} from '@/lib/utils/profile-utils';
+import { createSupabaseBrowserClient } from '@/lib/supabase/client';
+import type { AccountRole } from '@/lib/types/profile';
 import { ListingCard } from '@/components/marketplace/ListingCard';
 
-type AccountScreenTab = 'dashboard' | 'seller-profile' | 'login' | 'register';
+type AccountScreenTab =
+  | 'dashboard'
+  | 'seller-profile'
+  | 'login'
+  | 'register'
+  | 'forgot-password'
+  | 'reset-password';
 
 const ALL_DEMO_SELLERS = Object.values(DEMO_SELLERS);
 
 function AccountInterfaceInner({
   initialTab,
   initialSellerId,
+  confirmedFlag,
+  errorFlag,
 }: {
   initialTab: AccountScreenTab;
   initialSellerId: string;
+  confirmedFlag: boolean;
+  errorFlag: string | null;
 }) {
   const {
+    isSupabaseConfigured,
+    authLoading,
+    authUser,
+    userProfile,
+    refreshUserProfile,
+    signOutUser,
     listings,
     buyerRequests,
     savedListingIds,
@@ -47,66 +79,436 @@ function AccountInterfaceInner({
   const [selectedSellerId, setSelectedSellerId] = useState<string>(
     initialSellerId || DEMO_SELLERS.adebayoTech.id
   );
-  const [authPreviewFeedback, setAuthPreviewFeedback] = useState<string | null>(
-    null
+
+  // Auth Status & Error/Success Messages
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(
+    errorFlag === 'confirmation_failed'
+      ? 'Email confirmation or recovery link expired or was invalid. Please request a new link.'
+      : errorFlag === 'supabase_unconfigured'
+        ? 'Supabase environment variables are not configured yet.'
+        : null
+  );
+  const [authSuccess, setAuthSuccess] = useState<string | null>(
+    confirmedFlag
+      ? 'Your email has been confirmed and your session is active.'
+      : null
   );
 
-  // Login Form Preview State
+  // Login Form State
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
 
-  // Register Form Preview State
-  const [regName, setRegName] = useState('');
+  // Registration Form State
+  const [regDisplayName, setRegDisplayName] = useState('');
   const [regEmail, setRegEmail] = useState('');
+  const [regPassword, setRegPassword] = useState('');
+  const [regConfirmPassword, setRegConfirmPassword] = useState('');
   const [regWhatsapp, setRegWhatsapp] = useState('');
+  const [regCalling, setRegCalling] = useState('');
   const [regState, setRegState] = useState('Lagos');
-  const [regRole, setRegRole] = useState<'both' | 'buyer' | 'seller'>('both');
+  const [regCity, setRegCity] = useState('Lekki Phase 1');
+  const [regRole, setRegRole] = useState<AccountRole>('both');
+  const [regFieldErrors, setRegFieldErrors] = useState<Record<string, string>>(
+    {}
+  );
+
+  // Forgot & Reset Password State
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+
+  // Authenticated User Profile Edit State
+  const [editDisplayName, setEditDisplayName] = useState('');
+  const [editWhatsapp, setEditWhatsapp] = useState('');
+  const [editCalling, setEditCalling] = useState('');
+  const [editState, setEditState] = useState('Lagos');
+  const [editCity, setEditCity] = useState('Lagos');
+  const [editRole, setEditRole] = useState<AccountRole>('both');
+  const [editAvatarUrl, setEditAvatarUrl] = useState('');
+  const [editShowWhatsapp, setEditShowWhatsapp] = useState(false);
+  const [editShowCalling, setEditShowCalling] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileFeedback, setProfileFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+
+  // Sync profile editor fields when `userProfile` loads
+  useEffect(() => {
+    if (!userProfile) return;
+    queueMicrotask(() => {
+      setEditDisplayName(userProfile.display_name || '');
+      setEditWhatsapp(userProfile.whatsapp_number || '');
+      setEditCalling(userProfile.calling_number || '');
+      setEditState(userProfile.state || 'Lagos');
+      setEditCity(userProfile.city || 'Lagos');
+      setEditRole(userProfile.account_role || 'both');
+      setEditAvatarUrl(userProfile.avatar_url || '');
+      setEditShowWhatsapp(Boolean(userProfile.show_whatsapp_publicly));
+      setEditShowCalling(Boolean(userProfile.show_calling_publicly));
+    });
+  }, [userProfile]);
 
   const demoSeller =
     ALL_DEMO_SELLERS.find((s) => s.id === selectedSellerId) ||
     DEMO_SELLERS.adebayoTech;
 
   const savedListings = listings.filter((l) => savedListingIds.includes(l.id));
-  const sellerListings = listings.filter(
-    (l) => l.seller.id === demoSeller.id
-  );
+  const sellerListings = listings.filter((l) => l.seller.id === demoSeller.id);
   const displayedSellerListings =
     sellerListings.length > 0 ? sellerListings : listings.slice(0, 4);
 
-  const handlePreviewAuthSubmit = (
-    e: React.FormEvent,
-    mode: 'login' | 'register'
-  ) => {
+  // ---------------------------------------------------------------------------
+  // AUTHENTICATION HANDLERS
+  // ---------------------------------------------------------------------------
+
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setAuthPreviewFeedback(
-      mode === 'login'
-        ? 'Stage 1 Design-Ready UI: Authentication is not connected to a live backend yet. In Stage 2, this form will call supabase.auth.signInWithPassword().'
-        : 'Stage 1 Design-Ready UI: Registration is prepared for Stage 2 Supabase Auth (supabase.auth.signUp) and profile table creation.'
+    setAuthError(null);
+    setAuthSuccess(null);
+
+    const supabase = createSupabaseBrowserClient();
+    if (!supabase) {
+      setAuthError(
+        'Supabase is not yet connected. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in .env.local to sign in.'
+      );
+      return;
+    }
+
+    setAuthSubmitting(true);
+    const { error } = await supabase.auth.signInWithPassword({
+      email: loginEmail.trim(),
+      password: loginPassword,
+    });
+    setAuthSubmitting(false);
+
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+
+    await refreshUserProfile();
+    setLoginPassword('');
+    setAuthSuccess('Signed in successfully.');
+    setActiveTab('dashboard');
+  };
+
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthSuccess(null);
+
+    const validation = validateRegistrationInput({
+      displayName: regDisplayName,
+      email: regEmail,
+      password: regPassword,
+      confirmPassword: regConfirmPassword,
+      whatsappNumber: regWhatsapp,
+      callingNumber: regCalling,
+      state: regState,
+      city: regCity,
+      accountRole: regRole,
+    });
+
+    if (!validation.valid) {
+      setRegFieldErrors(validation.errors);
+      return;
+    }
+    setRegFieldErrors({});
+
+    const supabase = createSupabaseBrowserClient();
+    if (!supabase) {
+      setAuthError(
+        'Form validated (Nigerian phone normalised to ' +
+          (validation.normalizedWhatsapp || '') +
+          '). However, Supabase is not connected yet — configure NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY to create live accounts.'
+      );
+      return;
+    }
+
+    setAuthSubmitting(true);
+    const origin =
+      typeof window !== 'undefined' ? window.location.origin : '';
+
+    const { data, error } = await supabase.auth.signUp({
+      email: regEmail.trim(),
+      password: regPassword,
+      options: {
+        emailRedirectTo: `${origin}/auth/confirm`,
+        data: {
+          display_name: regDisplayName.trim(),
+          whatsapp_number: validation.normalizedWhatsapp,
+          calling_number: validation.normalizedCalling,
+          state: regState,
+          city: regCity.trim(),
+          account_role: regRole,
+        },
+      },
+    });
+    setAuthSubmitting(false);
+
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+
+    setRegPassword('');
+    setRegConfirmPassword('');
+
+    if (data.session) {
+      await refreshUserProfile();
+      setAuthSuccess(
+        'Account created and signed in! Your profile has been initialised with unverified status and private contact settings.'
+      );
+      setActiveTab('dashboard');
+    } else {
+      setAuthSuccess(
+        `Registration submitted for ${regEmail.trim()}. Please check your email inbox and click the confirmation link to activate your session.`
+      );
+    }
+  };
+
+  const handleForgotPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthSuccess(null);
+
+    if (!forgotEmail.trim()) {
+      setAuthError('Please enter the email address for your account.');
+      return;
+    }
+
+    const supabase = createSupabaseBrowserClient();
+    if (!supabase) {
+      setAuthError(
+        'Supabase is not yet connected. Configure NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY to send password recovery emails.'
+      );
+      return;
+    }
+
+    setAuthSubmitting(true);
+    const origin =
+      typeof window !== 'undefined' ? window.location.origin : '';
+    const { error } = await supabase.auth.resetPasswordForEmail(
+      forgotEmail.trim(),
+      {
+        redirectTo: `${origin}/auth/confirm?type=recovery&next=/account?tab=reset-password`,
+      }
+    );
+    setAuthSubmitting(false);
+
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+
+    setAuthSuccess(
+      `If an account exists for ${forgotEmail.trim()}, a password reset link has been sent.`
     );
   };
 
+  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthSuccess(null);
+
+    if (newPassword.length < 8) {
+      setAuthError('New password must be at least 8 characters long.');
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setAuthError('New password and confirmation do not match.');
+      return;
+    }
+
+    const supabase = createSupabaseBrowserClient();
+    if (!supabase) {
+      setAuthError('Supabase is not yet connected.');
+      return;
+    }
+
+    setAuthSubmitting(true);
+    const { error } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
+    setAuthSubmitting(false);
+
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+
+    setNewPassword('');
+    setConfirmNewPassword('');
+    setAuthSuccess('Your password has been updated successfully.');
+    setActiveTab('dashboard');
+  };
+
+  // ---------------------------------------------------------------------------
+  // AUTHENTICATED PROFILE UPDATE HANDLER
+  // ---------------------------------------------------------------------------
+
+  const handleProfileSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setProfileFeedback(null);
+
+    if (!authUser) {
+      setProfileFeedback({
+        type: 'error',
+        text: 'You must be signed in to update your profile.',
+      });
+      return;
+    }
+
+    const whatsappNorm = normalizeNigerianPhone(editWhatsapp);
+    if (editWhatsapp.trim() && !whatsappNorm.valid) {
+      setProfileFeedback({
+        type: 'error',
+        text: whatsappNorm.error || 'Invalid WhatsApp phone number.',
+      });
+      return;
+    }
+
+    const callingNorm = normalizeNigerianPhone(editCalling);
+    if (editCalling.trim() && !callingNorm.valid) {
+      setProfileFeedback({
+        type: 'error',
+        text: callingNorm.error || 'Invalid calling phone number.',
+      });
+      return;
+    }
+
+    setProfileSaving(true);
+    try {
+      const response = await fetch('/api/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetProfileId: authUser.id,
+          updates: {
+            display_name: editDisplayName.trim(),
+            whatsapp_number: whatsappNorm.normalized,
+            calling_number: callingNorm.normalized,
+            state: editState,
+            city: editCity.trim(),
+            account_role: editRole,
+            avatar_url: editAvatarUrl.trim() || null,
+            show_whatsapp_publicly: editShowWhatsapp,
+            show_calling_publicly: editShowCalling,
+          },
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        setProfileFeedback({
+          type: 'error',
+          text: result.error || 'Failed to update profile.',
+        });
+      } else {
+        await refreshUserProfile();
+        setProfileFeedback({
+          type: 'success',
+          text: 'Your profile and contact privacy preferences have been saved.',
+        });
+      }
+    } catch {
+      setProfileFeedback({
+        type: 'error',
+        text: 'Network error while saving profile.',
+      });
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const publicProfileProjection = userProfile
+    ? toPublicSellerProfile(userProfile)
+    : null;
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      {/* Stage 1 Transparency Notice */}
-      <div className="rounded-2xl bg-blue-50/90 border border-blue-200/80 p-4 mb-6 flex items-start gap-3 text-xs text-blue-950">
-        <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-        <div className="leading-relaxed">
-          <strong>Stage 1 Account Interface Preview:</strong> These Account
-          Dashboard, Seller Profile, Login, and Registration screens work with
-          typed mock data and are design-ready for Stage 2 Supabase Auth &amp;
-          PostgreSQL integration. No fake authentication or identity
-          verification claims are active.
+      {/* Stage 2 Connection & Honesty Status Banner */}
+      <div
+        className={`rounded-2xl border p-4 mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs ${
+          isSupabaseConfigured
+            ? 'bg-emerald-50/90 border-emerald-200 text-emerald-950'
+            : 'bg-blue-50/90 border-blue-200/80 text-blue-950'
+        }`}
+      >
+        <div className="flex items-start gap-3">
+          <Info
+            className={`w-4 h-4 shrink-0 mt-0.5 ${
+              isSupabaseConfigured ? 'text-emerald-600' : 'text-blue-600'
+            }`}
+          />
+          <div className="leading-relaxed">
+            {isSupabaseConfigured ? (
+              <>
+                <strong>Supabase Auth &amp; User Profiles Connected:</strong>{' '}
+                {authUser ? (
+                  <>
+                    Signed in as{' '}
+                    <span className="font-mono font-semibold">
+                      {authUser.email}
+                    </span>
+                    . Your profile is protected by Row Level Security (RLS).
+                  </>
+                ) : (
+                  'Sign in or register below to access your private profile. Marketplace listings and requests remain browser-only demo data in Stage 2.'
+                )}
+              </>
+            ) : (
+              <>
+                <strong>Stage 2 Supabase Client &amp; RLS Ready (Awaiting Project Keys):</strong>{' '}
+                Real Supabase authentication, Nigerian phone normalisation, and
+                PostgreSQL RLS migrations are implemented, but{' '}
+                <code className="font-mono">NEXT_PUBLIC_SUPABASE_URL</code> and{' '}
+                <code className="font-mono">
+                  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+                </code>{' '}
+                are not yet set in your environment.
+              </>
+            )}
+          </div>
         </div>
+
+        {authUser && (
+          <button
+            type="button"
+            onClick={() => signOutUser()}
+            className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer self-start sm:self-center"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Sign Out
+          </button>
+        )}
       </div>
 
-      {/* Header & 4-Screen Switcher */}
+      {/* Global Auth Alert Messages */}
+      {authError && (
+        <div className="mb-6 rounded-2xl bg-rose-50 border border-rose-200 p-4 flex items-start gap-2.5 text-xs text-rose-800">
+          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+          <span>{authError}</span>
+        </div>
+      )}
+
+      {authSuccess && (
+        <div className="mb-6 rounded-2xl bg-emerald-50 border border-emerald-200 p-4 flex items-start gap-2.5 text-xs text-emerald-900">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+          <span>{authSuccess}</span>
+        </div>
+      )}
+
+      {/* Header & Navigation Tabs */}
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-8">
         <div>
           <p className="text-xs font-semibold text-blue-600">
             SELPLAS Account &amp; Seller Center
           </p>
           <h1 className="text-3xl font-extrabold text-slate-950 font-display mt-1">
-            Account Interface
+            Account &amp; Profile
           </h1>
         </div>
 
@@ -121,7 +523,7 @@ function AccountInterfaceInner({
             aria-selected={activeTab === 'dashboard'}
             onClick={() => {
               setActiveTab('dashboard');
-              setAuthPreviewFeedback(null);
+              setAuthError(null);
             }}
             className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'dashboard'
@@ -139,7 +541,7 @@ function AccountInterfaceInner({
             aria-selected={activeTab === 'seller-profile'}
             onClick={() => {
               setActiveTab('seller-profile');
-              setAuthPreviewFeedback(null);
+              setAuthError(null);
             }}
             className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
               activeTab === 'seller-profile'
@@ -148,98 +550,483 @@ function AccountInterfaceInner({
             }`}
           >
             <Store className="w-3.5 h-3.5" />
-            Seller Profile
+            Seller Profiles
           </button>
 
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'login'}
-            onClick={() => {
-              setActiveTab('login');
-              setAuthPreviewFeedback(null);
-            }}
-            className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'login'
-                ? 'bg-blue-600 text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Lock className="w-3.5 h-3.5" />
-            Login Screen
-          </button>
+          {!authUser && (
+            <>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'login'}
+                onClick={() => {
+                  setActiveTab('login');
+                  setAuthError(null);
+                }}
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+                  activeTab === 'login'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Lock className="w-3.5 h-3.5" />
+                Sign In
+              </button>
 
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'register'}
-            onClick={() => {
-              setActiveTab('register');
-              setAuthPreviewFeedback(null);
-            }}
-            className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'register'
-                ? 'bg-blue-600 text-white shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <UserPlus className="w-3.5 h-3.5" />
-            Registration Screen
-          </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'register'}
+                onClick={() => {
+                  setActiveTab('register');
+                  setAuthError(null);
+                }}
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+                  activeTab === 'register'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                Register
+              </button>
+            </>
+          )}
+
+          {authUser && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'reset-password'}
+              onClick={() => {
+                setActiveTab('reset-password');
+                setAuthError(null);
+              }}
+              className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === 'reset-password'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              Change Password
+            </button>
+          )}
         </div>
       </div>
 
-      {/* TAB 1: ACCOUNT DASHBOARD */}
+      {/* =================================================================== */}
+      {/* TAB 1: ACCOUNT DASHBOARD & PROTECTED USER PROFILE                   */}
+      {/* =================================================================== */}
       {activeTab === 'dashboard' && (
         <div className="space-y-8">
-          {/* Summary Metric Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-            <div className="rounded-3xl bg-white/85 backdrop-blur-xl border border-slate-200/80 p-5">
-              <p className="text-xs text-slate-500">Marketplace Listings</p>
-              <p className="text-2xl font-extrabold text-slate-900 font-mono tabular-nums mt-1">
-                {listings.length}
-              </p>
-              <p className="text-xs text-blue-600 mt-1">
-                Active in Stage 1 state
-              </p>
+          {/* SECTION A: REAL AUTHENTICATED USER PROFILE (OR AUTH GATE) */}
+          <div className="rounded-3xl bg-white/90 backdrop-blur-2xl border border-slate-200/80 shadow-[0_12px_40px_rgba(15,23,42,0.05)] p-6 sm:p-8">
+            {authLoading ? (
+              <div className="py-10 flex items-center justify-center gap-2.5 text-sm text-slate-600">
+                <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+                <span>Verifying your authenticated session...</span>
+              </div>
+            ) : authUser && userProfile ? (
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-14 h-14 rounded-2xl bg-blue-600 text-white font-bold text-lg flex items-center justify-center shrink-0">
+                      {userProfile.display_name
+                        .split(' ')
+                        .map((n) => n[0])
+                        .join('')
+                        .slice(0, 2)
+                        .toUpperCase()}
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <span className="font-semibold text-emerald-700">
+                          Authenticated Registered Account
+                        </span>
+                        <span aria-hidden="true">·</span>
+                        <span>Role: {userProfile.account_role.toUpperCase()}</span>
+                        <span aria-hidden="true">·</span>
+                        <span className="text-amber-700 font-semibold">
+                          Verification: {userProfile.verification_status}
+                        </span>
+                      </div>
+                      <h2 className="text-xl font-extrabold text-slate-950 font-display mt-0.5">
+                        {userProfile.display_name}
+                      </h2>
+                      <p className="text-xs text-slate-500 font-mono">
+                        {userProfile.email} · ID: {userProfile.id.slice(0, 8)}...
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-slate-500 space-y-1">
+                    <p>
+                      Joined:{' '}
+                      {new Date(userProfile.created_at).toLocaleDateString(
+                        'en-NG'
+                      )}
+                    </p>
+                    <p>
+                      Updated:{' '}
+                      {new Date(userProfile.updated_at).toLocaleDateString(
+                        'en-NG'
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                {profileFeedback && (
+                  <div
+                    className={`p-3.5 rounded-2xl border text-xs ${
+                      profileFeedback.type === 'success'
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                        : 'bg-rose-50 border-rose-200 text-rose-800'
+                    }`}
+                  >
+                    {profileFeedback.text}
+                  </div>
+                )}
+
+                <form onSubmit={handleProfileSave} className="space-y-5">
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                    <UserCog className="w-4 h-4 text-blue-600" />
+                    <h3>Edit Your Permitted Profile Information</h3>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div>
+                      <label
+                        htmlFor="profile-display-name"
+                        className="block text-xs font-semibold text-slate-700 mb-1"
+                      >
+                        Display Name *
+                      </label>
+                      <input
+                        id="profile-display-name"
+                        type="text"
+                        required
+                        value={editDisplayName}
+                        onChange={(e) => setEditDisplayName(e.target.value)}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="profile-email-readonly"
+                        className="block text-xs font-semibold text-slate-700 mb-1"
+                      >
+                        Email (Managed by Supabase Auth)
+                      </label>
+                      <input
+                        id="profile-email-readonly"
+                        type="email"
+                        readOnly
+                        disabled
+                        value={userProfile.email}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 border border-slate-200 text-sm text-slate-500 font-mono cursor-not-allowed"
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="profile-role-select"
+                        className="block text-xs font-semibold text-slate-700 mb-1"
+                      >
+                        Account Role
+                      </label>
+                      <select
+                        id="profile-role-select"
+                        value={editRole}
+                        onChange={(e) =>
+                          setEditRole(e.target.value as AccountRole)
+                        }
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                      >
+                        <option value="both">Buyer &amp; Seller (Combined)</option>
+                        <option value="buyer">Buyer Only</option>
+                        <option value="seller">Seller Only</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="profile-whatsapp-input"
+                        className="block text-xs font-semibold text-slate-700 mb-1"
+                      >
+                        WhatsApp Number (+234) — Unverified
+                      </label>
+                      <input
+                        id="profile-whatsapp-input"
+                        type="tel"
+                        value={editWhatsapp}
+                        onChange={(e) => setEditWhatsapp(e.target.value)}
+                        placeholder="+2348030001122"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm font-mono text-slate-900 focus:outline-none focus:border-blue-600"
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="profile-calling-input"
+                        className="block text-xs font-semibold text-slate-700 mb-1"
+                      >
+                        Separate Calling Number (Optional)
+                      </label>
+                      <input
+                        id="profile-calling-input"
+                        type="tel"
+                        value={editCalling}
+                        onChange={(e) => setEditCalling(e.target.value)}
+                        placeholder="+2348090002233"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm font-mono text-slate-900 focus:outline-none focus:border-blue-600"
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="profile-avatar-input"
+                        className="block text-xs font-semibold text-slate-700 mb-1"
+                      >
+                        Profile Image URL (Optional)
+                      </label>
+                      <input
+                        id="profile-avatar-input"
+                        type="url"
+                        value={editAvatarUrl}
+                        onChange={(e) => setEditAvatarUrl(e.target.value)}
+                        placeholder="https://..."
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="profile-state-select"
+                        className="block text-xs font-semibold text-slate-700 mb-1"
+                      >
+                        Nigerian State *
+                      </label>
+                      <select
+                        id="profile-state-select"
+                        value={editState}
+                        onChange={(e) => setEditState(e.target.value)}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                      >
+                        {NIGERIAN_STATES.map((st) => (
+                          <option key={st} value={st}>
+                            {st}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="profile-city-input"
+                        className="block text-xs font-semibold text-slate-700 mb-1"
+                      >
+                        City / Town *
+                      </label>
+                      <input
+                        id="profile-city-input"
+                        type="text"
+                        required
+                        value={editCity}
+                        onChange={(e) => setEditCity(e.target.value)}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Verification Status (Read-Only)
+                      </label>
+                      <div className="px-3.5 py-2.5 rounded-xl bg-amber-50/80 border border-amber-200 text-xs font-semibold text-amber-900 flex items-center gap-1.5">
+                        <UserCheck className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>
+                          {userProfile.verification_status.toUpperCase()} (Phone
+                          &amp; ID not verified yet)
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Contact Visibility Preferences (Private by Default) */}
+                  <div className="rounded-2xl bg-slate-50 border border-slate-200/80 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-bold text-slate-900">
+                        Contact Visibility Preferences (Private by Default)
+                      </p>
+                      <span className="text-[11px] text-slate-500">
+                        Controls what appears on your public seller profile
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      <label className="flex items-center gap-2.5 p-3 rounded-xl bg-white border border-slate-200 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editShowWhatsapp}
+                          onChange={(e) =>
+                            setEditShowWhatsapp(e.target.checked)
+                          }
+                          className="w-4 h-4 rounded text-blue-600"
+                        />
+                        <div>
+                          <span className="font-semibold text-slate-900 block">
+                            Show WhatsApp number on public seller profile
+                          </span>
+                          <span className="text-slate-500">
+                            {editShowWhatsapp
+                              ? 'Visible to marketplace visitors'
+                              : 'Hidden (Private)'}
+                          </span>
+                        </div>
+                      </label>
+
+                      <label className="flex items-center gap-2.5 p-3 rounded-xl bg-white border border-slate-200 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editShowCalling}
+                          onChange={(e) => setEditShowCalling(e.target.checked)}
+                          className="w-4 h-4 rounded text-blue-600"
+                        />
+                        <div>
+                          <span className="font-semibold text-slate-900 block">
+                            Show calling number on public seller profile
+                          </span>
+                          <span className="text-slate-500">
+                            {editShowCalling
+                              ? 'Visible to marketplace visitors'
+                              : 'Hidden (Private)'}
+                          </span>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 pt-2">
+                    <p className="text-xs text-slate-500">
+                      Note: Real registered accounts have 0 completed sales or
+                      ratings until marketplace transactions are connected.
+                    </p>
+                    <button
+                      type="submit"
+                      disabled={profileSaving}
+                      className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-semibold shadow-xs flex items-center gap-2 cursor-pointer shrink-0"
+                    >
+                      {profileSaving && (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      )}
+                      Save Profile Changes
+                    </button>
+                  </div>
+                </form>
+              </div>
+            ) : (
+              /* AUTH GATE WHEN VISITOR IS NOT SIGNED IN */
+              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+                <div className="space-y-2 max-w-2xl">
+                  <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700">
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Protected Account Profile Area</span>
+                  </div>
+                  <h2 className="text-xl font-bold text-slate-900 font-display">
+                    Sign In to View or Edit Your Personal Profile
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                    Private user profile data (contact numbers, email, and
+                    visibility settings) is protected by Supabase Auth and Row
+                    Level Security. Sign in or create an account to manage your
+                    profile.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('login')}
+                    className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                  >
+                    Sign In
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('register')}
+                    className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Create Account
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* SECTION B: BROWSER-LOCAL DEMONSTRATION ACTIVITY (CLEARLY DISTINGUISHED) */}
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900 font-display">
+                  Browser-Local Demonstration Activity
+                </h2>
+                <p className="text-xs text-slate-500">
+                  These sample listings, saved items, and messages are stored in
+                  your browser for Stage 1/2 demonstration and are not linked to
+                  real user transactions.
+                </p>
+              </div>
             </div>
 
-            <div className="rounded-3xl bg-white/85 backdrop-blur-xl border border-slate-200/80 p-5">
-              <p className="text-xs text-slate-500">Saved Items</p>
-              <p className="text-2xl font-extrabold text-slate-900 font-mono tabular-nums mt-1">
-                {savedListings.length}
-              </p>
-              <p className="text-xs text-slate-500 mt-1">
-                Bookmarked for comparison
-              </p>
-            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+              <div className="rounded-3xl bg-white/85 backdrop-blur-xl border border-slate-200/80 p-5">
+                <p className="text-xs text-slate-500">Demo Listings in Browser</p>
+                <p className="text-2xl font-extrabold text-slate-900 font-mono tabular-nums mt-1">
+                  {listings.length}
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Local demonstration catalog
+                </p>
+              </div>
 
-            <div className="rounded-3xl bg-white/85 backdrop-blur-xl border border-slate-200/80 p-5">
-              <p className="text-xs text-slate-500">
-                Mocked In-Platform Messages
-              </p>
-              <p className="text-2xl font-extrabold text-slate-900 font-mono tabular-nums mt-1">
-                {platformMessages.length}
-              </p>
-              <p className="text-xs text-slate-500 mt-1">
-                Simulated buyer-seller threads
-              </p>
-            </div>
+              <div className="rounded-3xl bg-white/85 backdrop-blur-xl border border-slate-200/80 p-5">
+                <p className="text-xs text-slate-500">Saved Demo Items</p>
+                <p className="text-2xl font-extrabold text-slate-900 font-mono tabular-nums mt-1">
+                  {savedListings.length}
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Bookmarked in this browser
+                </p>
+              </div>
 
-            <div className="rounded-3xl bg-white/85 backdrop-blur-xl border border-slate-200/80 p-5">
-              <p className="text-xs text-slate-500">
-                Your &ldquo;I Have This&rdquo; Responses
-              </p>
-              <p className="text-2xl font-extrabold text-blue-600 font-mono tabular-nums mt-1">
-                {sellerOffers.length}
-              </p>
-              <p className="text-xs text-slate-500 mt-1">
-                Sent to buyers in this session
-              </p>
+              <div className="rounded-3xl bg-white/85 backdrop-blur-xl border border-slate-200/80 p-5">
+                <p className="text-xs text-slate-500">
+                  Mocked In-Platform Messages
+                </p>
+                <p className="text-2xl font-extrabold text-slate-900 font-mono tabular-nums mt-1">
+                  {platformMessages.length}
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Browser-only preview threads
+                </p>
+              </div>
+
+              <div className="rounded-3xl bg-white/85 backdrop-blur-xl border border-slate-200/80 p-5">
+                <p className="text-xs text-slate-500">
+                  Local &ldquo;I Have This&rdquo; Offers
+                </p>
+                <p className="text-2xl font-extrabold text-blue-600 font-mono tabular-nums mt-1">
+                  {sellerOffers.length}
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Saved in current browser only
+                </p>
+              </div>
             </div>
           </div>
 
-          {/* Mocked Messages, Seller Responses & Stage 2 Readiness */}
+          {/* Mocked Messages, Seller Responses & Supabase Configuration Guide */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-7 space-y-6">
               {/* Mocked In-Platform Messages Box */}
@@ -247,13 +1034,13 @@ function AccountInterfaceInner({
                 <div className="flex items-center justify-between">
                   <h2 className="text-lg font-bold text-slate-900 font-display flex items-center gap-2">
                     <MessageSquare className="w-4 h-4 text-blue-600" />
-                    In-Platform Messages (Mocked)
+                    In-Platform Messages (Browser-Only Mock)
                   </h2>
                   <Link
                     href="/explore"
                     className="text-xs font-semibold text-blue-600 hover:text-blue-700"
                   >
-                    Message a Seller
+                    Explore Listings
                   </Link>
                 </div>
 
@@ -285,157 +1072,159 @@ function AccountInterfaceInner({
                 </div>
               </div>
 
-              {/* Seller Responses ("I Have This") */}
+              {/* Saved Listings */}
               <div className="rounded-3xl bg-white/85 backdrop-blur-xl border border-slate-200/80 p-6 space-y-4">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-lg font-bold text-slate-900 font-display">
-                    Seller Responses (&ldquo;I Have This&rdquo;)
+                  <h2 className="text-lg font-bold text-slate-900 font-display flex items-center gap-2">
+                    <Heart className="w-4 h-4 text-rose-500" />
+                    Saved Demo Listings ({savedListings.length})
                   </h2>
                   <Link
-                    href="/requests"
+                    href="/explore"
                     className="text-xs font-semibold text-blue-600 hover:text-blue-700"
                   >
-                    Browse Buyer Requests ({buyerRequests.length})
+                    Browse All ({buyerRequests.length} Requests)
                   </Link>
                 </div>
 
-                {sellerOffers.length > 0 ? (
-                  <div className="space-y-3">
-                    {sellerOffers.map((offer) => (
-                      <div
-                        key={offer.id}
-                        className="rounded-2xl bg-slate-50 border border-slate-200/70 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                      >
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900">
-                            {offer.requestTitle}
-                          </p>
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            Condition: {offer.condition} · Location:{' '}
-                            {offer.location}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-sm font-bold text-blue-600 font-mono tabular-nums">
-                            {formatNaira(offer.offeredPriceNaira)}
-                          </span>
-                        </div>
-                      </div>
+                {savedListings.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {savedListings.slice(0, 2).map((item) => (
+                      <ListingCard key={item.id} listing={item} />
                     ))}
                   </div>
                 ) : (
-                  <div className="rounded-2xl bg-slate-50/80 border border-slate-200/60 p-6 text-center">
-                    <p className="text-sm font-semibold text-slate-800">
-                      No &ldquo;I Have This&rdquo; offers sent yet
-                    </p>
-                    <p className="text-xs text-slate-500 mt-1">
-                      Visit the Buyer Requests page and click &ldquo;I Have
-                      This&rdquo; on any item you can supply.
-                    </p>
-                    <Link
-                      href="/requests"
-                      className="mt-3 inline-flex px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-semibold"
-                    >
-                      Explore Buyer Requests
-                    </Link>
-                  </div>
+                  <p className="text-xs text-slate-500">
+                    Tap the heart icon on any listing card to bookmark it in
+                    your browser.
+                  </p>
                 )}
               </div>
             </div>
 
+            {/* Supabase Setup & RLS Summary Box */}
             <div className="lg:col-span-5 rounded-3xl bg-white/85 backdrop-blur-xl border border-slate-200/80 p-6 space-y-4 h-fit">
               <div className="flex items-center gap-2.5">
                 <Database className="w-5 h-5 text-blue-600" />
                 <h2 className="text-lg font-bold text-slate-900 font-display">
-                  Stage 2 Backend Readiness
+                  Stage 3 Supabase &amp; RLS Architecture
                 </h2>
               </div>
               <p className="text-xs text-slate-600 leading-relaxed">
-                This Next.js App Router frontend is structured for seamless
-                connection to{' '}
-                <strong>Supabase PostgreSQL, Auth, and Storage</strong> plus a
-                shared <strong>React Native Expo</strong> mobile app.
+                Authentication, user profiles, marketplace listings, buyer
+                requests, offers, and photo uploads use{' '}
+                <code className="font-mono">@supabase/ssr</code> and{' '}
+                <code className="font-mono">@supabase/supabase-js</code> with
+                strict Row Level Security.
               </p>
               <ul className="space-y-2 text-xs text-slate-700">
                 <li>
-                  • <strong>Typed Data Layer:</strong>{' '}
+                  • <strong>Stage 2 Migration (Profiles):</strong>{' '}
                   <code className="font-mono text-[11px]">
-                    lib/supabase/client-ready.ts
+                    supabase/migrations/20261112000001_user_profiles_and_rls.sql
                   </code>
                 </li>
                 <li>
-                  • <strong>API Route Handlers:</strong>{' '}
-                  <code className="font-mono text-[11px]">/api/listings</code>{' '}
-                  &amp;{' '}
-                  <code className="font-mono text-[11px]">/api/requests</code>
+                  • <strong>Stage 3 Migration (Marketplace &amp; Storage):</strong>{' '}
+                  <code className="font-mono text-[11px]">
+                    supabase/migrations/20261112000002_marketplace_listings_requests_offers.sql
+                  </code>
                 </li>
                 <li>
-                  • <strong>Identity Verification Status:</strong> Not yet
-                  connected (planned for later trust phase).
+                  • <strong>Active PostgreSQL Tables:</strong>{' '}
+                  <code className="font-mono text-[11px]">
+                    public.profiles, public.listings, public.buyer_requests, public.request_offers
+                  </code>
+                </li>
+                <li>
+                  • <strong>Supabase Storage Bucket:</strong>{' '}
+                  <code className="font-mono text-[11px]">listing-images</code>{' '}
+                  (folder-isolated per <code className="font-mono">auth.uid()</code>)
+                </li>
+                <li>
+                  • <strong>Marketplace APIs:</strong>{' '}
+                  <code className="font-mono text-[11px]">
+                    /api/profile, /api/listings, /api/requests, /api/offers
+                  </code>
                 </li>
               </ul>
-              <div className="pt-2 flex flex-wrap gap-2">
-                <Link
-                  href="/sell"
-                  className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5"
-                >
-                  <PlusCircle className="w-3.5 h-3.5" />
-                  Create Listing
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('seller-profile')}
-                  className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold cursor-pointer"
-                >
-                  Preview Seller Profile
-                </button>
-              </div>
             </div>
-          </div>
-
-          {/* Saved Listings Section */}
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-slate-950 font-display flex items-center gap-2">
-                <Heart className="w-5 h-5 text-rose-500" />
-                Saved Listings ({savedListings.length})
-              </h2>
-              <Link
-                href="/explore"
-                className="text-xs font-semibold text-blue-600 hover:text-blue-700"
-              >
-                Explore More
-              </Link>
-            </div>
-
-            {savedListings.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                {savedListings.map((item) => (
-                  <ListingCard key={item.id} listing={item} />
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-3xl bg-white/80 border border-slate-200/80 p-8 text-center">
-                <p className="text-sm font-semibold text-slate-800">
-                  You haven&apos;t saved any listings yet.
-                </p>
-                <p className="text-xs text-slate-500 mt-1">
-                  Tap the heart icon on any product or service card to save it
-                  here.
-                </p>
-              </div>
-            )}
           </div>
         </div>
       )}
 
-      {/* TAB 2: SELLER PROFILE (DESIGN-READY) */}
+      {/* =================================================================== */}
+      {/* TAB 2: PUBLIC SELLER PROFILES (REAL USER PREVIEW vs FICTIONAL DEMO) */}
+      {/* =================================================================== */}
       {activeTab === 'seller-profile' && (
         <div className="space-y-8">
-          {/* Demo Seller Switcher */}
+          {/* If signed in, show how the user's OWN public seller profile looks to visitors */}
+          {authUser && publicProfileProjection && (
+            <div className="rounded-3xl bg-emerald-50/70 border border-emerald-200 p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider">
+                    Your Real Public Seller Profile Preview
+                  </span>
+                  <h2 className="text-xl font-extrabold text-slate-950 font-display mt-0.5">
+                    {publicProfileProjection.display_name}
+                  </h2>
+                  <p className="text-xs text-slate-600">
+                    {publicProfileProjection.city},{' '}
+                    {publicProfileProjection.state} · Role:{' '}
+                    {publicProfileProjection.account_role} · Status:{' '}
+                    <strong>{publicProfileProjection.verification_status}</strong>
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="px-3 py-1.5 rounded-xl bg-white border border-emerald-200 text-slate-700 flex items-center gap-1.5">
+                    {publicProfileProjection.public_whatsapp_number ? (
+                      <>
+                        <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                        Public WhatsApp:{' '}
+                        <strong className="font-mono">
+                          {publicProfileProjection.public_whatsapp_number}
+                        </strong>
+                      </>
+                    ) : (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+                        WhatsApp Hidden (Private)
+                      </>
+                    )}
+                  </span>
+
+                  <span className="px-3 py-1.5 rounded-xl bg-white border border-emerald-200 text-slate-700 flex items-center gap-1.5">
+                    {publicProfileProjection.public_calling_number ? (
+                      <>
+                        <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                        Public Call:{' '}
+                        <strong className="font-mono">
+                          {publicProfileProjection.public_calling_number}
+                        </strong>
+                      </>
+                    ) : (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+                        Call Number Hidden (Private)
+                      </>
+                    )}
+                  </span>
+                </div>
+              </div>
+              <p className="text-xs text-slate-600">
+                Your private email is never exposed on public seller profiles,
+                and no fictional sales or ratings are attached to your real
+                account.
+              </p>
+            </div>
+          )}
+
+          {/* Fictional Sample Seller Switcher */}
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white/80 border border-slate-200/80 p-4">
             <span className="text-xs font-semibold text-slate-600">
-              Previewing Fictional Seller Profile:
+              Previewing Fictional Sample Seller Profiles (Stage 1/2 Demo Data):
             </span>
             <div className="flex flex-wrap items-center gap-2">
               {ALL_DEMO_SELLERS.map((s) => (
@@ -467,7 +1256,7 @@ function AccountInterfaceInner({
                 <div>
                   <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                     <span className="font-semibold text-blue-700">
-                      Fictional Demonstration Seller Profile
+                      Fictional Demonstration Seller Profile (Not a Real User)
                     </span>
                     <span aria-hidden="true">·</span>
                     <span>{demoSeller.handle}</span>
@@ -485,7 +1274,6 @@ function AccountInterfaceInner({
                 </div>
               </div>
 
-              {/* Contact Seller Options: WhatsApp, Call, or In-Platform Message */}
               <div className="flex flex-wrap items-center gap-2.5">
                 <a
                   href={`https://wa.me/234${demoSeller.whatsappPhone.replace(
@@ -518,7 +1306,7 @@ function AccountInterfaceInner({
                   className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <MessageSquare className="w-3.5 h-3.5" />
-                  In-Platform Message
+                  In-Platform Message (Mock)
                 </button>
               </div>
             </div>
@@ -527,13 +1315,12 @@ function AccountInterfaceInner({
               {demoSeller.bio}
             </p>
 
-            {/* Transparent Identity Verification Status Box */}
             <div className="mt-5 pt-5 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-600">
               <div className="flex items-center gap-2">
                 <UserCheck className="w-4 h-4 text-amber-600 shrink-0" />
                 <span>
                   <strong>Verification Status:</strong> Unverified Demo Account
-                  (Identity verification is not yet implemented in Stage 1).
+                  (Identity verification is not yet implemented).
                 </span>
               </div>
               <span className="text-slate-400">
@@ -544,7 +1331,7 @@ function AccountInterfaceInner({
 
           <div>
             <h3 className="text-xl font-bold text-slate-950 font-display mb-4">
-              Listings by {demoSeller.fullName}
+              Fictional Demo Listings by {demoSeller.fullName}
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
               {displayedSellerListings.map((item) => (
@@ -555,57 +1342,62 @@ function AccountInterfaceInner({
         </div>
       )}
 
-      {/* TAB 3: DESIGN-READY LOGIN SCREEN */}
+      {/* =================================================================== */}
+      {/* TAB 3: LOGIN SCREEN                                                 */}
+      {/* =================================================================== */}
       {activeTab === 'login' && (
         <div className="max-w-md mx-auto">
           <div className="rounded-3xl bg-white/90 backdrop-blur-2xl border border-slate-200/80 shadow-xl p-7 sm:p-8 space-y-5">
             <div>
               <p className="text-xs font-semibold text-blue-600">
-                Design-Ready Screen (Stage 2 Supabase Auth Ready)
+                Supabase Authentication
               </p>
               <h2 className="text-2xl font-extrabold text-slate-950 font-display mt-1">
                 Sign In to SELPLAS
               </h2>
               <p className="text-xs text-slate-500 mt-1">
-                Manage your listings, buyer requests, and WhatsApp inquiries.
+                Sign in with your email and password to access your profile.
               </p>
             </div>
 
-            {authPreviewFeedback && (
-              <div className="p-3.5 rounded-2xl bg-blue-50 border border-blue-200 text-xs text-blue-900 leading-relaxed">
-                {authPreviewFeedback}
-              </div>
-            )}
-
-            <form
-              onSubmit={(e) => handlePreviewAuthSubmit(e, 'login')}
-              className="space-y-4"
-            >
+            <form onSubmit={handleLoginSubmit} className="space-y-4">
               <div>
                 <label
                   htmlFor="login-email-input"
                   className="block text-xs font-semibold text-slate-700 mb-1.5"
                 >
-                  Email Address or Phone Number
+                  Email Address
                 </label>
                 <input
                   id="login-email-input"
-                  type="text"
+                  type="email"
                   required
                   value={loginEmail}
                   onChange={(e) => setLoginEmail(e.target.value)}
-                  placeholder="you@example.com or 0803 000 0000"
+                  placeholder="you@example.com"
                   className="w-full px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
                 />
               </div>
 
               <div>
-                <label
-                  htmlFor="login-password-input"
-                  className="block text-xs font-semibold text-slate-700 mb-1.5"
-                >
-                  Password
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label
+                    htmlFor="login-password-input"
+                    className="block text-xs font-semibold text-slate-700"
+                  >
+                    Password
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('forgot-password');
+                      setAuthError(null);
+                    }}
+                    className="text-xs font-semibold text-blue-600 hover:underline cursor-pointer"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
                 <input
                   id="login-password-input"
                   type="password"
@@ -619,19 +1411,23 @@ function AccountInterfaceInner({
 
               <button
                 type="submit"
-                className="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold shadow-sm transition-colors cursor-pointer"
+                disabled={authSubmitting}
+                className="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-semibold shadow-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
               >
-                Preview Sign In (Stage 2 Auth Ready)
+                {authSubmitting && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                Sign In
               </button>
             </form>
 
             <div className="pt-4 border-t border-slate-100 text-center text-xs text-slate-600">
-              New to SELPLAS?{' '}
+              Don&apos;t have an account?{' '}
               <button
                 type="button"
                 onClick={() => {
                   setActiveTab('register');
-                  setAuthPreviewFeedback(null);
+                  setAuthError(null);
                 }}
                 className="font-semibold text-blue-600 hover:underline cursor-pointer"
               >
@@ -642,58 +1438,59 @@ function AccountInterfaceInner({
         </div>
       )}
 
-      {/* TAB 4: DESIGN-READY REGISTRATION SCREEN */}
+      {/* =================================================================== */}
+      {/* TAB 4: REGISTRATION SCREEN (WITH PASSWORD + CONFIRM PASSWORD)       */}
+      {/* =================================================================== */}
       {activeTab === 'register' && (
-        <div className="max-w-lg mx-auto">
+        <div className="max-w-xl mx-auto">
           <div className="rounded-3xl bg-white/90 backdrop-blur-2xl border border-slate-200/80 shadow-xl p-7 sm:p-8 space-y-5">
             <div>
               <p className="text-xs font-semibold text-blue-600">
-                Design-Ready Screen (Stage 2 Supabase Auth Ready)
+                Supabase Auth &amp; User Profile Registration
               </p>
               <h2 className="text-2xl font-extrabold text-slate-950 font-display mt-1">
                 Create Your SELPLAS Account
               </h2>
               <p className="text-xs text-slate-500 mt-1">
-                Buy products, offer services, or post buyer requests across
-                Nigeria.
+                Your contact numbers are normalised to +234 format, kept private
+                by default, and marked unverified until verified.
               </p>
             </div>
 
-            {authPreviewFeedback && (
-              <div className="p-3.5 rounded-2xl bg-blue-50 border border-blue-200 text-xs text-blue-900 leading-relaxed">
-                {authPreviewFeedback}
+            {Object.keys(regFieldErrors).length > 0 && (
+              <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-800 space-y-1">
+                {Object.values(regFieldErrors).map((err, idx) => (
+                  <p key={idx}>• {err}</p>
+                ))}
               </div>
             )}
 
-            <form
-              onSubmit={(e) => handlePreviewAuthSubmit(e, 'register')}
-              className="space-y-4"
-            >
-              <div>
-                <label
-                  htmlFor="reg-fullname-input"
-                  className="block text-xs font-semibold text-slate-700 mb-1.5"
-                >
-                  Full Name or Business Name
-                </label>
-                <input
-                  id="reg-fullname-input"
-                  type="text"
-                  required
-                  value={regName}
-                  onChange={(e) => setRegName(e.target.value)}
-                  placeholder="e.g. Chidinma Okafor"
-                  className="w-full px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
-                />
-              </div>
-
+            <form onSubmit={handleRegisterSubmit} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div>
+                  <label
+                    htmlFor="reg-fullname-input"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
+                  >
+                    Display Name / Business Name *
+                  </label>
+                  <input
+                    id="reg-fullname-input"
+                    type="text"
+                    required
+                    value={regDisplayName}
+                    onChange={(e) => setRegDisplayName(e.target.value)}
+                    placeholder="e.g. Chidinma Okafor"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  />
+                </div>
+
                 <div>
                   <label
                     htmlFor="reg-email-input"
                     className="block text-xs font-semibold text-slate-700 mb-1.5"
                   >
-                    Email Address
+                    Email Address *
                   </label>
                   <input
                     id="reg-email-input"
@@ -705,13 +1502,55 @@ function AccountInterfaceInner({
                     className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
                   />
                 </div>
+              </div>
 
+              {/* Password & Password Confirmation Fields */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div>
+                  <label
+                    htmlFor="reg-password-input"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
+                  >
+                    Password (min 8 chars) *
+                  </label>
+                  <input
+                    id="reg-password-input"
+                    type="password"
+                    required
+                    value={regPassword}
+                    onChange={(e) => setRegPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="reg-confirm-password-input"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
+                  >
+                    Confirm Password *
+                  </label>
+                  <input
+                    id="reg-confirm-password-input"
+                    type="password"
+                    required
+                    value={regConfirmPassword}
+                    onChange={(e) => setRegConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  />
+                </div>
+              </div>
+
+              {/* WhatsApp & Optional Separate Calling Number */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
                   <label
                     htmlFor="reg-whatsapp-input"
                     className="block text-xs font-semibold text-slate-700 mb-1.5"
                   >
-                    WhatsApp Number
+                    WhatsApp Number *
                   </label>
                   <input
                     id="reg-whatsapp-input"
@@ -719,19 +1558,37 @@ function AccountInterfaceInner({
                     required
                     value={regWhatsapp}
                     onChange={(e) => setRegWhatsapp(e.target.value)}
-                    placeholder="0803 000 0000"
+                    placeholder="0803 000 1122"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm font-mono text-slate-900 focus:outline-none focus:border-blue-600"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="reg-calling-input"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
+                  >
+                    Separate Calling Number (Optional)
+                  </label>
+                  <input
+                    id="reg-calling-input"
+                    type="tel"
+                    value={regCalling}
+                    onChange={(e) => setRegCalling(e.target.value)}
+                    placeholder="0809 000 2233"
                     className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm font-mono text-slate-900 focus:outline-none focus:border-blue-600"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              {/* Nigerian State, City & Account Role */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                 <div>
                   <label
                     htmlFor="reg-state-select"
                     className="block text-xs font-semibold text-slate-700 mb-1.5"
                   >
-                    Primary Nigerian State
+                    Nigerian State *
                   </label>
                   <select
                     id="reg-state-select"
@@ -749,31 +1606,51 @@ function AccountInterfaceInner({
 
                 <div>
                   <label
+                    htmlFor="reg-city-input"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
+                  >
+                    City / Town *
+                  </label>
+                  <input
+                    id="reg-city-input"
+                    type="text"
+                    required
+                    value={regCity}
+                    onChange={(e) => setRegCity(e.target.value)}
+                    placeholder="e.g. Lekki, Wuse 2"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                  />
+                </div>
+
+                <div>
+                  <label
                     htmlFor="reg-role-select"
                     className="block text-xs font-semibold text-slate-700 mb-1.5"
                   >
-                    How will you use SELPLAS?
+                    Account Role *
                   </label>
                   <select
                     id="reg-role-select"
                     value={regRole}
-                    onChange={(e) =>
-                      setRegRole(e.target.value as 'both' | 'buyer' | 'seller')
-                    }
+                    onChange={(e) => setRegRole(e.target.value as AccountRole)}
                     className="w-full px-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
                   >
-                    <option value="both">Buying, Selling &amp; Requests</option>
-                    <option value="buyer">Mostly Buying &amp; Requesting</option>
-                    <option value="seller">Mostly Selling &amp; Services</option>
+                    <option value="both">Buyer &amp; Seller</option>
+                    <option value="buyer">Buyer Only</option>
+                    <option value="seller">Seller Only</option>
                   </select>
                 </div>
               </div>
 
               <button
                 type="submit"
-                className="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold shadow-sm transition-colors cursor-pointer"
+                disabled={authSubmitting}
+                className="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-semibold shadow-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
               >
-                Preview Account Registration (Stage 2 Ready)
+                {authSubmitting && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                Create Account
               </button>
             </form>
 
@@ -783,13 +1660,150 @@ function AccountInterfaceInner({
                 type="button"
                 onClick={() => {
                   setActiveTab('login');
-                  setAuthPreviewFeedback(null);
+                  setAuthError(null);
                 }}
                 className="font-semibold text-blue-600 hover:underline cursor-pointer"
               >
                 Sign In
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* TAB 5: FORGOT PASSWORD SCREEN                                       */}
+      {/* =================================================================== */}
+      {activeTab === 'forgot-password' && (
+        <div className="max-w-md mx-auto">
+          <div className="rounded-3xl bg-white/90 backdrop-blur-2xl border border-slate-200/80 shadow-xl p-7 sm:p-8 space-y-5">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                <Mail className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-xl font-extrabold text-slate-950 font-display">
+                  Forgot Your Password?
+                </h2>
+                <p className="text-xs text-slate-500">
+                  We will send a password recovery link to your email.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleForgotPasswordSubmit} className="space-y-4">
+              <div>
+                <label
+                  htmlFor="forgot-email-input"
+                  className="block text-xs font-semibold text-slate-700 mb-1.5"
+                >
+                  Account Email Address
+                </label>
+                <input
+                  id="forgot-email-input"
+                  type="email"
+                  required
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="w-full px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={authSubmitting}
+                className="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-semibold shadow-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                {authSubmitting && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                Send Recovery Link
+              </button>
+            </form>
+
+            <div className="pt-4 border-t border-slate-100 text-center text-xs text-slate-600">
+              Remembered your password?{' '}
+              <button
+                type="button"
+                onClick={() => setActiveTab('login')}
+                className="font-semibold text-blue-600 hover:underline cursor-pointer"
+              >
+                Back to Sign In
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* TAB 6: PASSWORD RESET SCREEN                                        */}
+      {/* =================================================================== */}
+      {activeTab === 'reset-password' && (
+        <div className="max-w-md mx-auto">
+          <div className="rounded-3xl bg-white/90 backdrop-blur-2xl border border-slate-200/80 shadow-xl p-7 sm:p-8 space-y-5">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                <KeyRound className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-xl font-extrabold text-slate-950 font-display">
+                  Set a New Password
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Enter and confirm your new account password below.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
+              <div>
+                <label
+                  htmlFor="reset-new-password"
+                  className="block text-xs font-semibold text-slate-700 mb-1.5"
+                >
+                  New Password (min 8 chars)
+                </label>
+                <input
+                  id="reset-new-password"
+                  type="password"
+                  required
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="reset-confirm-password"
+                  className="block text-xs font-semibold text-slate-700 mb-1.5"
+                >
+                  Confirm New Password
+                </label>
+                <input
+                  id="reset-confirm-password"
+                  type="password"
+                  required
+                  value={confirmNewPassword}
+                  onChange={(e) => setConfirmNewPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-sm text-slate-900 focus:outline-none focus:border-blue-600"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={authSubmitting}
+                className="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-semibold shadow-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                {authSubmitting && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                Update Password
+              </button>
+            </form>
           </div>
         </div>
       )}
@@ -801,19 +1815,29 @@ function AccountPageContent() {
   const searchParams = useSearchParams();
   const rawTab = searchParams.get('tab');
   const validTab: AccountScreenTab =
-    rawTab === 'seller-profile' ||
-    rawTab === 'login' ||
-    rawTab === 'register' ||
-    rawTab === 'dashboard'
-      ? rawTab
-      : 'dashboard';
-  const sellerId = searchParams.get('seller') || DEMO_SELLERS.adebayoTech.id;
+    rawTab === 'seller-profile' || rawTab === 'seller'
+      ? 'seller-profile'
+      : rawTab === 'login' ||
+          rawTab === 'register' ||
+          rawTab === 'forgot-password' ||
+          rawTab === 'reset-password' ||
+          rawTab === 'dashboard'
+        ? rawTab
+        : 'dashboard';
+  const sellerId =
+    searchParams.get('seller') ||
+    searchParams.get('sellerId') ||
+    DEMO_SELLERS.adebayoTech.id;
+  const confirmedFlag = searchParams.get('confirmed') === '1';
+  const errorFlag = searchParams.get('error');
 
   return (
     <AccountInterfaceInner
-      key={`${validTab}-${sellerId}`}
+      key={`${validTab}-${sellerId}-${confirmedFlag}-${errorFlag || ''}`}
       initialTab={validTab}
       initialSellerId={sellerId}
+      confirmedFlag={confirmedFlag}
+      errorFlag={errorFlag}
     />
   );
 }
